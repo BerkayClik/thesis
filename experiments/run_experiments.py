@@ -179,10 +179,14 @@ def run_single_experiment(
     )
 
     # Load best model for evaluation
-    try:
+    checkpoint_path = os.path.join(trainer.checkpoint_dir, 'best_model.pt')
+    if os.path.exists(checkpoint_path):
         trainer.load_checkpoint('best_model.pt')
-    except FileNotFoundError:
-        pass  # Use current model if no checkpoint
+        if verbose:
+            print(f"    Loaded best model checkpoint")
+    else:
+        if verbose:
+            print(f"    Warning: No checkpoint found, using current model state")
 
     # Evaluate on test set
     test_metrics = evaluate_model(model, test_loader, device)
