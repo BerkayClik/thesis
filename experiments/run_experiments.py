@@ -19,8 +19,8 @@ import numpy as np
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from src.data.loader import load_sp500_data
-from src.data.preprocessing import preprocess_data, temporal_split
+from src.data.loader import load_sp500_data, dataframe_to_tensor
+from src.data.preprocessing import preprocess_data
 from src.data.dataset import SP500Dataset
 from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel
 from src.models.qnn_attention_model import QuaternionLSTMNoAttention
@@ -28,6 +28,7 @@ from src.training.trainer import Trainer
 from src.training.losses import mse_loss
 from src.evaluation.metrics import compute_mae, compute_mse
 from src.evaluation.directional_accuracy import compute_directional_accuracy
+from src.evaluation.sharpe_ratio import compute_sharpe_ratio
 
 
 def load_config(config_path: str) -> Dict:
@@ -120,7 +121,8 @@ def evaluate_model(
     return {
         'mae': compute_mae(preds, targets),
         'mse': compute_mse(preds, targets),
-        'directional_accuracy': compute_directional_accuracy(preds, targets, prevs)
+        'directional_accuracy': compute_directional_accuracy(preds, targets, prevs),
+        'sharpe_ratio': compute_sharpe_ratio(preds, targets, prevs)
     }
 
 
@@ -207,19 +209,26 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True) 
     if verbose:
         print("Loading data...")
 
-    data = load_sp500_data(
+    df = load_sp500_data(
         ticker=config['data']['ticker'],
         start_date=config['data']['start_date'],
         end_date=config['data']['end_date'],
         cache_dir=config['data'].get('cache_dir', 'data/cache')
     )
 
+    # Convert to tensor with dates
+    data, dates = dataframe_to_tensor(df)
+
     # Preprocess
-    train_data, val_data, test_data = preprocess_data(
+    processed = preprocess_data(
         data,
+        dates=dates,
         train_end_year=config['data']['train_end_year'],
         val_end_year=config['data']['val_end_year']
     )
+    train_data = processed['train_data']
+    val_data = processed['val_data']
+    test_data = processed['test_data']
 
     # Create datasets
     window_size = config['data']['window_size']
@@ -265,13 +274,15 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True) 
         test_maes = [r['test_metrics']['mae'] for r in variant_results]
         test_mses = [r['test_metrics']['mse'] for r in variant_results]
         test_das = [r['test_metrics']['directional_accuracy'] for r in variant_results]
+        test_sharpes = [r['test_metrics']['sharpe_ratio'] for r in variant_results]
 
         all_results[variant_name] = {
             'individual_runs': variant_results,
             'aggregated': {
                 'mae': {'mean': np.mean(test_maes), 'std': np.std(test_maes)},
                 'mse': {'mean': np.mean(test_mses), 'std': np.std(test_mses)},
-                'directional_accuracy': {'mean': np.mean(test_das), 'std': np.std(test_das)}
+                'directional_accuracy': {'mean': np.mean(test_das), 'std': np.std(test_das)},
+                'sharpe_ratio': {'mean': np.mean(test_sharpes), 'std': np.std(test_sharpes)}
             }
         }
 
@@ -280,19 +291,20 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True) 
             print(f"    MAE: {np.mean(test_maes):.4f} ± {np.std(test_maes):.4f}")
             print(f"    MSE: {np.mean(test_mses):.4f} ± {np.std(test_mses):.4f}")
             print(f"    Dir Acc: {np.mean(test_das):.2f}% ± {np.std(test_das):.2f}%")
+            print(f"    Sharpe: {np.mean(test_sharpes):.3f} ± {np.std(test_sharpes):.3f}")
 
     return all_results
 
 
 def print_results_table(results: Dict):
     """Print results in a formatted table."""
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 100)
     print("EXPERIMENT RESULTS")
-    print("=" * 80)
+    print("=" * 100)
 
     # Header
-    print(f"{'Model':<30} {'MAE':<20} {'MSE':<20} {'Dir Acc (%)':<20}")
-    print("-" * 80)
+    print(f"{'Model':<28} {'MAE':<18} {'MSE':<18} {'Dir Acc (%)':<16} {'Sharpe':<16}")
+    print("-" * 100)
 
     # Rows
     for model_name, model_results in results.items():
@@ -300,9 +312,10 @@ def print_results_table(results: Dict):
         mae_str = f"{agg['mae']['mean']:.4f} ± {agg['mae']['std']:.4f}"
         mse_str = f"{agg['mse']['mean']:.4f} ± {agg['mse']['std']:.4f}"
         da_str = f"{agg['directional_accuracy']['mean']:.2f} ± {agg['directional_accuracy']['std']:.2f}"
-        print(f"{model_name:<30} {mae_str:<20} {mse_str:<20} {da_str:<20}")
+        sharpe_str = f"{agg['sharpe_ratio']['mean']:.3f} ± {agg['sharpe_ratio']['std']:.3f}"
+        print(f"{model_name:<28} {mae_str:<18} {mse_str:<18} {da_str:<16} {sharpe_str:<16}")
 
-    print("=" * 80)
+    print("=" * 100)
 
 
 def save_results(results: Dict, output_dir: str, experiment_name: str):

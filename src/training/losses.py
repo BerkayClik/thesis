@@ -19,4 +19,5 @@ def mse_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     Returns:
         MSE loss value.
     """
-    return F.mse_loss(pred, target)
+    # Flatten both tensors to ensure matching shapes
+    return F.mse_loss(pred.view(-1), target.view(-1))

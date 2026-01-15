@@ -42,6 +42,7 @@ evaluation:
     - mae
     - mse
     - directional_accuracy
+    - sharpe_ratio
 
 # Device settings
 device: "cuda"  # Options: cuda, cpu, mps
