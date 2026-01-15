@@ -7,8 +7,54 @@ Provides training loop with early stopping, validation, and checkpointing.
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from typing import Dict, Optional, Callable
+from typing import Dict, Optional, Callable, List
 import os
+
+
+def compute_gradient_norms(model: nn.Module) -> Dict[str, float]:
+    """
+    Compute gradient norms for each parameter group.
+
+    Args:
+        model: PyTorch model after backward pass.
+
+    Returns:
+        Dict mapping parameter names to gradient norms.
+    """
+    grad_norms = {}
+    total_norm = 0.0
+
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            param_norm = param.grad.data.norm(2).item()
+            grad_norms[name] = param_norm
+            total_norm += param_norm ** 2
+
+    grad_norms['total'] = total_norm ** 0.5
+    return grad_norms
+
+
+def compute_weight_stats(model: nn.Module) -> Dict[str, Dict[str, float]]:
+    """
+    Compute weight statistics for each parameter.
+
+    Args:
+        model: PyTorch model.
+
+    Returns:
+        Dict mapping parameter names to stats (mean, std, min, max, norm).
+    """
+    stats = {}
+    for name, param in model.named_parameters():
+        data = param.data
+        stats[name] = {
+            'mean': data.mean().item(),
+            'std': data.std().item(),
+            'min': data.min().item(),
+            'max': data.max().item(),
+            'norm': data.norm(2).item()
+        }
+    return stats
 
 
 class Trainer:
@@ -29,29 +75,47 @@ class Trainer:
         optimizer: torch.optim.Optimizer,
         loss_fn: Callable,
         device: torch.device,
-        checkpoint_dir: str = "checkpoints"
+        checkpoint_dir: str = "checkpoints",
+        debug: bool = False
     ):
         self.model = model
         self.optimizer = optimizer
         self.loss_fn = loss_fn
         self.device = device
         self.checkpoint_dir = checkpoint_dir
+        self.debug = debug
 
         self.model.to(device)
 
-    def train_epoch(self, dataloader: DataLoader) -> float:
+        # Store initial weight stats if debug mode
+        if self.debug:
+            self.initial_weight_stats = compute_weight_stats(model)
+            self._log_weight_stats("Initial weight statistics:", self.initial_weight_stats)
+
+    def _log_weight_stats(self, title: str, stats: Dict):
+        """Log weight statistics in a readable format."""
+        print(f"\n{title}")
+        print("-" * 60)
+        for name, s in stats.items():
+            print(f"  {name}:")
+            print(f"    mean={s['mean']:.6f}, std={s['std']:.6f}, "
+                  f"min={s['min']:.6f}, max={s['max']:.6f}, norm={s['norm']:.4f}")
+
+    def train_epoch(self, dataloader: DataLoader, track_gradients: bool = False) -> Dict:
         """
         Train for one epoch.
 
         Args:
             dataloader: Training data loader.
+            track_gradients: Whether to track gradient norms.
 
         Returns:
-            Average training loss.
+            Dict with 'loss' and optionally 'grad_norms'.
         """
         self.model.train()
         total_loss = 0.0
         num_batches = 0
+        all_grad_norms = []
 
         for x, y in dataloader:
             x = x.to(self.device)
@@ -61,12 +125,25 @@ class Trainer:
             pred = self.model(x)
             loss = self.loss_fn(pred.squeeze(-1), y)
             loss.backward()
+
+            # Track gradients before optimizer step
+            if track_gradients or self.debug:
+                grad_norms = compute_gradient_norms(self.model)
+                all_grad_norms.append(grad_norms['total'])
+
             self.optimizer.step()
 
             total_loss += loss.item()
             num_batches += 1
 
-        return total_loss / max(num_batches, 1)
+        result = {'loss': total_loss / max(num_batches, 1)}
+
+        if track_gradients or self.debug:
+            result['grad_norm_mean'] = sum(all_grad_norms) / len(all_grad_norms) if all_grad_norms else 0.0
+            result['grad_norm_max'] = max(all_grad_norms) if all_grad_norms else 0.0
+            result['grad_norm_min'] = min(all_grad_norms) if all_grad_norms else 0.0
+
+        return result
 
     def validate(self, dataloader: DataLoader) -> float:
         """
@@ -122,20 +199,37 @@ class Trainer:
             'best_epoch': 0
         }
 
+        # Add debug tracking if enabled
+        if self.debug:
+            history['grad_norms'] = []
+            history['weight_stats'] = []
+
         best_val_loss = float('inf')
         patience_counter = 0
 
         for epoch in range(num_epochs):
-            train_loss = self.train_epoch(train_loader)
+            train_result = self.train_epoch(train_loader, track_gradients=self.debug)
+            train_loss = train_result['loss']
             val_loss = self.validate(val_loader)
 
             history['train_loss'].append(train_loss)
             history['val_loss'].append(val_loss)
 
+            # Track debug info
+            if self.debug:
+                history['grad_norms'].append({
+                    'mean': train_result.get('grad_norm_mean', 0.0),
+                    'max': train_result.get('grad_norm_max', 0.0),
+                    'min': train_result.get('grad_norm_min', 0.0)
+                })
+
             if verbose:
-                print(f"Epoch {epoch+1}/{num_epochs} - "
-                      f"Train Loss: {train_loss:.6f} - "
-                      f"Val Loss: {val_loss:.6f}")
+                msg = (f"Epoch {epoch+1}/{num_epochs} - "
+                       f"Train Loss: {train_loss:.6f} - "
+                       f"Val Loss: {val_loss:.6f}")
+                if self.debug:
+                    msg += f" - Grad Norm: {train_result.get('grad_norm_mean', 0.0):.4f}"
+                print(msg)
 
             # Early stopping check
             if val_loss < best_val_loss:

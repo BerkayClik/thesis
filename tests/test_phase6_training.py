@@ -201,10 +201,12 @@ class TestTrainer:
         trainer = Trainer(model, optimizer, mse_loss, torch.device('cpu'))
 
         train_loader, _ = self.create_data_loaders()
-        loss = trainer.train_epoch(train_loader)
+        result = trainer.train_epoch(train_loader)
 
-        assert isinstance(loss, float)
-        assert loss >= 0
+        assert isinstance(result, dict)
+        assert 'loss' in result
+        assert isinstance(result['loss'], float)
+        assert result['loss'] >= 0
 
     def test_validate(self):
         """Validation runs without error."""

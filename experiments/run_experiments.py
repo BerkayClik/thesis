@@ -46,14 +46,25 @@ def set_seed(seed: int):
 
 
 def get_device(config: Dict) -> torch.device:
-    """Get compute device from config."""
+    """Get compute device from config with automatic fallback."""
     device_name = config.get('device', 'cpu')
-    if device_name == 'cuda' and not torch.cuda.is_available():
-        print("CUDA not available, falling back to CPU")
-        device_name = 'cpu'
-    elif device_name == 'mps' and not torch.backends.mps.is_available():
-        print("MPS not available, falling back to CPU")
-        device_name = 'cpu'
+
+    if device_name == 'cuda':
+        if torch.cuda.is_available():
+            return torch.device('cuda')
+        elif torch.backends.mps.is_available():
+            print("CUDA not available, using MPS")
+            return torch.device('mps')
+        else:
+            print("CUDA not available, falling back to CPU")
+            return torch.device('cpu')
+    elif device_name == 'mps':
+        if torch.backends.mps.is_available():
+            return torch.device('mps')
+        else:
+            print("MPS not available, falling back to CPU")
+            return torch.device('cpu')
+
     return torch.device(device_name)
 
 
@@ -170,7 +181,8 @@ def run_single_experiment(
     test_loader: DataLoader,
     device: torch.device,
     norm_stats: Dict = None,
-    verbose: bool = True
+    verbose: bool = True,
+    debug: bool = False
 ) -> Dict:
     """
     Run a single experiment with one model configuration and seed.
@@ -187,6 +199,11 @@ def run_single_experiment(
         dropout=model_config.get('dropout', 0.0)
     )
 
+    # Count parameters for debugging
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    if verbose:
+        print(f"    Model parameters: {num_params:,}")
+
     # Optimizer
     optimizer = torch.optim.Adam(
         model.parameters(),
@@ -199,7 +216,8 @@ def run_single_experiment(
         optimizer=optimizer,
         loss_fn=mse_loss,
         device=device,
-        checkpoint_dir=os.path.join(config.get('output', {}).get('results_dir', 'experiments/results'), 'checkpoints')
+        checkpoint_dir=os.path.join(config.get('output', {}).get('results_dir', 'experiments/results'), 'checkpoints'),
+        debug=debug
     )
 
     # Train
@@ -227,17 +245,30 @@ def run_single_experiment(
     # Evaluate on test set
     test_metrics = evaluate_model(model, test_loader, device, norm_stats)
 
-    return {
+    result = {
         'seed': seed,
         'history': history,
         'test_metrics': test_metrics,
         'best_epoch': history['best_epoch'],
         'final_train_loss': history['train_loss'][-1] if history['train_loss'] else None,
-        'final_val_loss': history['val_loss'][-1] if history['val_loss'] else None
+        'final_val_loss': history['val_loss'][-1] if history['val_loss'] else None,
+        'num_parameters': num_params
     }
 
+    # Add gradient norm summary if available
+    if 'grad_norms' in history:
+        grad_norms = history['grad_norms']
+        if grad_norms:
+            result['grad_norm_summary'] = {
+                'first_epoch': grad_norms[0] if grad_norms else None,
+                'last_epoch': grad_norms[-1] if grad_norms else None,
+                'mean_across_epochs': sum(g['mean'] for g in grad_norms) / len(grad_norms)
+            }
 
-def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True) -> Dict:
+    return result
+
+
+def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, debug: bool = False) -> Dict:
     """
     Run a complete experiment with multiple seeds.
 
@@ -308,7 +339,8 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True) 
                 test_loader=test_loader,
                 device=device,
                 norm_stats=norm_stats,
-                verbose=verbose
+                verbose=verbose,
+                debug=debug
             )
             variant_results.append(result)
 
@@ -399,6 +431,8 @@ def main():
                         help='Path to experiment configuration file')
     parser.add_argument('--quiet', action='store_true',
                         help='Reduce output verbosity')
+    parser.add_argument('--debug', action='store_true',
+                        help='Enable debug mode (track gradients, weight stats)')
     args = parser.parse_args()
 
     # Load configs
@@ -413,11 +447,16 @@ def main():
     print(f"Seeds: {experiment_config['experiment']['seeds']}")
     print()
 
+    if args.debug:
+        print("DEBUG MODE ENABLED - Tracking gradients and weight statistics")
+        print()
+
     # Run experiments
     results = run_experiment(
         config=base_config,
         experiment_config=experiment_config['experiment'],
-        verbose=not args.quiet
+        verbose=not args.quiet,
+        debug=args.debug
     )
 
     # Print results table
