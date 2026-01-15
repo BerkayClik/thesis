@@ -196,8 +196,10 @@ class QuaternionLSTM(nn.Module):
             h = [h_0[layer] for layer in range(self.num_layers)]
             c = [c_0[layer] for layer in range(self.num_layers)]
 
+        # Pre-allocate output tensor to avoid list append/stack overhead
+        output = torch.zeros(batch_size, seq_len, self.hidden_size, 4, device=device, dtype=dtype)
+
         # Process each time step
-        outputs = []
         for t in range(seq_len):
             # Input for first layer is x[:, t]
             layer_input = x[:, t]
@@ -212,10 +214,7 @@ class QuaternionLSTM(nn.Module):
                     layer_input = self.dropout_layer(layer_input)
 
             # Output is hidden state from last layer
-            outputs.append(h[-1])
-
-        # Stack outputs: (batch, seq_len, hidden_size, 4)
-        output = torch.stack(outputs, dim=1)
+            output[:, t] = h[-1]
 
         # Stack final hidden states: (num_layers, batch, hidden_size, 4)
         h_n = torch.stack(h, dim=0)
