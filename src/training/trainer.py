@@ -59,7 +59,7 @@ class Trainer:
 
             self.optimizer.zero_grad()
             pred = self.model(x)
-            loss = self.loss_fn(pred.squeeze(), y)
+            loss = self.loss_fn(pred.squeeze(-1), y)
             loss.backward()
             self.optimizer.step()
 
@@ -88,7 +88,7 @@ class Trainer:
                 y = y.to(self.device)
 
                 pred = self.model(x)
-                loss = self.loss_fn(pred.squeeze(), y)
+                loss = self.loss_fn(pred.squeeze(-1), y)
 
                 total_loss += loss.item()
                 num_batches += 1
