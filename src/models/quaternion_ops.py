@@ -4,6 +4,7 @@ Quaternion operations module.
 Provides fundamental quaternion operations for neural networks.
 """
 
+import math
 import torch
 import torch.nn as nn
 
@@ -84,7 +85,9 @@ class QuaternionLinear(nn.Module):
 
         # Weight quaternion for each input-output pair
         # Shape: (out_features, in_features, 4)
-        self.weight = nn.Parameter(torch.randn(out_features, in_features, 4) * 0.01)
+        # Xavier-like initialization for quaternions
+        stdv = 1.0 / math.sqrt(in_features)
+        self.weight = nn.Parameter(torch.empty(out_features, in_features, 4).uniform_(-stdv, stdv))
         self.bias = nn.Parameter(torch.zeros(out_features, 4))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

@@ -89,15 +89,39 @@ def create_model(model_type: str, hidden_size: int, num_layers: int, dropout: fl
         raise ValueError(f"Unknown model type: {model_type}")
 
 
+def denormalize(x: torch.Tensor, stats: Dict, col: int = 3) -> torch.Tensor:
+    """
+    Denormalize data using stored statistics.
+
+    Args:
+        x: Normalized tensor.
+        stats: Dict with 'mean' and 'std' tensors.
+        col: Column index for single-feature denormalization (default: 3 for Close).
+
+    Returns:
+        Denormalized tensor.
+    """
+    return x * stats['std'][col] + stats['mean'][col]
+
+
 def evaluate_model(
     model,
     dataloader: DataLoader,
-    device: torch.device
+    device: torch.device,
+    norm_stats: Dict = None
 ) -> Dict:
     """
     Evaluate model on a dataset.
 
     Returns dict with MAE, MSE, and directional accuracy.
+    Directional accuracy and Sharpe ratio are computed on denormalized values
+    to reflect true price movements.
+
+    Args:
+        model: The model to evaluate.
+        dataloader: DataLoader for the evaluation dataset.
+        device: Compute device.
+        norm_stats: Normalization statistics for denormalizing metrics.
     """
     model.eval()
     all_preds = []
@@ -118,11 +142,22 @@ def evaluate_model(
     targets = torch.cat(all_targets)
     prevs = torch.cat(all_prevs)
 
+    # Denormalize for directional accuracy and Sharpe ratio computation
+    # These metrics need real price values to be meaningful
+    if norm_stats is not None:
+        preds_denorm = denormalize(preds, norm_stats, col=3)
+        targets_denorm = denormalize(targets, norm_stats, col=3)
+        prevs_denorm = denormalize(prevs, norm_stats, col=3)
+    else:
+        preds_denorm = preds
+        targets_denorm = targets
+        prevs_denorm = prevs
+
     return {
         'mae': compute_mae(preds, targets),
         'mse': compute_mse(preds, targets),
-        'directional_accuracy': compute_directional_accuracy(preds, targets, prevs),
-        'sharpe_ratio': compute_sharpe_ratio(preds, targets, prevs)
+        'directional_accuracy': compute_directional_accuracy(preds_denorm, targets_denorm, prevs_denorm),
+        'sharpe_ratio': compute_sharpe_ratio(preds_denorm, targets_denorm, prevs_denorm)
     }
 
 
@@ -134,6 +169,7 @@ def run_single_experiment(
     val_loader: DataLoader,
     test_loader: DataLoader,
     device: torch.device,
+    norm_stats: Dict = None,
     verbose: bool = True
 ) -> Dict:
     """
@@ -189,7 +225,7 @@ def run_single_experiment(
             print(f"    Warning: No checkpoint found, using current model state")
 
     # Evaluate on test set
-    test_metrics = evaluate_model(model, test_loader, device)
+    test_metrics = evaluate_model(model, test_loader, device, norm_stats)
 
     return {
         'seed': seed,
@@ -233,6 +269,7 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True) 
     train_data = processed['train_data']
     val_data = processed['val_data']
     test_data = processed['test_data']
+    norm_stats = processed['norm_stats']
 
     # Create datasets
     window_size = config['data']['window_size']
@@ -270,6 +307,7 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True) 
                 val_loader=val_loader,
                 test_loader=test_loader,
                 device=device,
+                norm_stats=norm_stats,
                 verbose=verbose
             )
             variant_results.append(result)

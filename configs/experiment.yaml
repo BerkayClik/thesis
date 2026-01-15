@@ -26,16 +26,16 @@ experiment:
     - name: "quaternion_lstm"
       model:
         type: "quaternion_lstm"
-        hidden_size: 16
+        hidden_size: 64
         num_layers: 1
-        dropout: 0.0
+        dropout: 0.1
 
     - name: "quaternion_lstm_attention"
       model:
         type: "quaternion_lstm_attention"
-        hidden_size: 16
+        hidden_size: 64
         num_layers: 1
-        dropout: 0.0
+        dropout: 0.1
 
 # Ablation studies
 ablation:
