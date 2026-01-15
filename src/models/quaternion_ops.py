@@ -97,6 +97,10 @@ class QuaternionLinear(nn.Module):
         Returns:
             Output of shape (batch, out_features, 4).
         """
+        assert x.ndim == 3, f"Expected 3D input (batch, features, 4), got {x.shape}"
+        assert x.shape[1] == self.in_features, f"Expected {self.in_features} input features, got {x.shape[1]}"
+        assert x.shape[2] == 4, f"Expected quaternion dim 4, got {x.shape[2]}"
+
         # x: (batch, in_features, 4), weight: (out_features, in_features, 4)
         # Use broadcasting to compute all hamilton products at once
         x_expanded = x.unsqueeze(1)  # (batch, 1, in_features, 4)
