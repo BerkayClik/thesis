@@ -97,12 +97,10 @@ class QuaternionLinear(nn.Module):
         Returns:
             Output of shape (batch, out_features, 4).
         """
-        batch_size = x.size(0)
-        output = torch.zeros(batch_size, self.out_features, 4, device=x.device, dtype=x.dtype)
-
-        for j in range(self.out_features):
-            for i in range(self.in_features):
-                output[:, j] = output[:, j] + hamilton_product(x[:, i], self.weight[j, i])
-            output[:, j] = output[:, j] + self.bias[j]
-
+        # x: (batch, in_features, 4), weight: (out_features, in_features, 4)
+        # Use broadcasting to compute all hamilton products at once
+        x_expanded = x.unsqueeze(1)  # (batch, 1, in_features, 4)
+        w_expanded = self.weight.unsqueeze(0)  # (1, out_features, in_features, 4)
+        products = hamilton_product(x_expanded, w_expanded)  # (batch, out_features, in_features, 4)
+        output = products.sum(dim=2) + self.bias  # (batch, out_features, 4)
         return output
