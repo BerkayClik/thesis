@@ -216,14 +216,16 @@ class TestPrintResultsTable:
                 'aggregated': {
                     'mae': {'mean': 0.1, 'std': 0.01},
                     'mse': {'mean': 0.02, 'std': 0.002},
-                    'directional_accuracy': {'mean': 55.0, 'std': 2.0}
+                    'directional_accuracy': {'mean': 55.0, 'std': 2.0},
+                    'sharpe_ratio': {'mean': 0.5, 'std': 0.1}
                 }
             },
             'quaternion_lstm': {
                 'aggregated': {
                     'mae': {'mean': 0.09, 'std': 0.02},
                     'mse': {'mean': 0.018, 'std': 0.003},
-                    'directional_accuracy': {'mean': 57.0, 'std': 3.0}
+                    'directional_accuracy': {'mean': 57.0, 'std': 3.0},
+                    'sharpe_ratio': {'mean': 0.6, 'std': 0.15}
                 }
             }
         }
