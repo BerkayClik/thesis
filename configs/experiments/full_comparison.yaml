@@ -1,0 +1,104 @@
+# Experiment configuration
+# Extends base.yaml with experiment-specific settings
+
+# Experiment identification
+experiment:
+  name: "baseline_comparison"
+  description: "Compare real-valued and quaternion LSTM models with fair parameter-matched comparisons"
+  seeds: [42, 123, 456]  # Multiple seeds for statistical significance
+
+  # Model variants to test
+  # PRIMARY FOCUS: Parameter-matched comparisons for fair evaluation
+  # Layer-matched variants included for completeness but have 4x more parameters
+  variants:
+    # === NAIVE BASELINE ===
+    # Always predicts zero return - establishes minimum baseline
+    - name: "naive_zero"
+      model:
+        type: "naive_zero"
+        hidden_size: 1  # Ignored, just for compatibility
+        num_layers: 1
+        dropout: 0.0
+
+    # === BASELINE MODELS ===
+    - name: "real_lstm"
+      model:
+        type: "real_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "real_lstm_attention"
+      model:
+        type: "real_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    # === PARAMETER-MATCHED MODELS (PRIMARY - Fair Comparison) ===
+    # Adjusted hidden sizes to approximately match parameter counts
+    # Real LSTM (64h, 2L) ~ 51k params
+    # Quaternion LSTM (32h, 2L) ~ 56k params (fair comparison)
+    - name: "quaternion_lstm_param_matched"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 32  # Reduced to match real LSTM param count (~51k)
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0001
+
+    - name: "quaternion_lstm_attention_param_matched"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 32  # Reduced to match real LSTM param count
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0001
+
+    # === LAYER-MATCHED QUATERNION MODELS (SECONDARY - More Parameters) ===
+    # Same num_layers=2 as real LSTM but ~4x more parameters
+    # Included for completeness, not primary comparison
+    - name: "quaternion_lstm"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 64
+        num_layers: 2  # Matched to real LSTM (but 4x params)
+        dropout: 0.1
+      learning_rate: 0.0001
+
+    - name: "quaternion_lstm_attention"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 64
+        num_layers: 2  # Matched to real LSTM (but 4x params)
+        dropout: 0.1
+      learning_rate: 0.0001
+
+# Ablation studies
+ablation:
+  # Real vs Quaternion comparison
+  encoding_comparison:
+    enabled: true
+    models:
+      - "real_lstm"
+      - "quaternion_lstm"
+
+  # Attention vs No Attention
+  attention_comparison:
+    enabled: true
+    models:
+      - "quaternion_lstm"
+      - "quaternion_lstm_attention"
+
+  # Frequency sensitivity (if hourly data available)
+  frequency_comparison:
+    enabled: false
+    frequencies:
+      - "daily"
+      - "hourly"
+
+# Output settings
+output:
+  results_dir: "experiments/results"
+  save_predictions: true
+  save_attention_weights: true

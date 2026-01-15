@@ -1,0 +1,60 @@
+# Quick iteration experiment configuration
+# Reduced epochs/patience, single seed for faster iteration
+
+experiment:
+  name: "quick_iteration"
+  description: "Quick iteration mode - reduced training, single seed for validation"
+  seeds: [42]  # 1 seed instead of 3 (3x faster)
+
+  variants:
+    # === BASELINE MODELS ===
+    - name: "real_lstm"
+      model:
+        type: "real_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "real_lstm_attention"
+      model:
+        type: "real_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    # === QUATERNION MODELS ===
+    - name: "quaternion_lstm"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0001
+
+    - name: "quaternion_lstm_param_matched"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0001
+
+    - name: "quaternion_lstm_attention"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0001
+
+# Override base.yaml training settings for faster iteration
+training:
+  num_epochs: 50      # Reduced from 100
+  patience: 5         # Reduced from 10
+  batch_size: 64      # Increased from 32 for faster epochs
+  fast_mode: true     # Enable TF32 for 2-3x speedup on Ampere+ GPUs
+
+output:
+  results_dir: "experiments/results"
+  save_predictions: true
+  save_attention_weights: true

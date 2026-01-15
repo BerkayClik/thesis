@@ -1,0 +1,63 @@
+# Configuration for Quaternion Neural Networks
+# Bitcoin (BTC-USD) Daily Forecasting - Single Seed Run
+# Train: 2019-2023 / Val: 2024 / Test: 2025
+
+# Data settings
+data:
+  # Data source
+  ticker: "BTC-USD"
+  start_date: "2019-01-01"
+  end_date: "2025-12-31"
+  cache_dir: "data/cache"
+
+  # Window settings
+  window_size: 20
+  target_col: 3  # Close price
+
+  # Split periods (by year)
+  train_end_year: 2023
+  val_end_year: 2024
+  # Split periods:
+  # Train: 2019-2023 (5 years)
+  # Val: 2024 (1 year)
+  # Test: 2025 (1 year)
+
+# Model settings
+model:
+  type: "real_lstm"  # Options: real_lstm, real_lstm_attention, quaternion_lstm, quaternion_lstm_attention
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.1
+
+# Training settings
+training:
+  batch_size: 32
+  num_epochs: 100
+  learning_rate: 0.0005
+  patience: 10
+  seed: 42
+  # Gradient clipping for training stability
+  max_grad_norm: 1.0
+  # Learning rate scheduler (optional)
+  scheduler:
+    type: "reduce_on_plateau"
+    factor: 0.5
+    patience: 5
+
+# Evaluation settings
+evaluation:
+  metrics:
+    - mape
+    - directional_accuracy
+    - sharpe_ratio
+    - directional_accuracy_3class
+    - sharpe_ratio_3class
+  flat_threshold_fraction: 0.5
+
+# Device settings
+device: "cuda"  # Options: cuda, cpu, mps
+
+# Output settings
+output:
+  results_dir: "experiments/results/daily_btc_single"
+  checkpoint_dir: "checkpoints/daily_btc_single"

@@ -1,0 +1,71 @@
+# Experiment configuration for Daily BTC Single Seed Run
+# Train: 2019-2023 / Val: 2024 / Test: 2025
+
+experiment:
+  name: "daily_btc_single_seed"
+  description: "Single seed comparison of real vs quaternion LSTM models on daily BTC data (2019-2025)"
+  seeds: [42]  # Single seed
+
+  variants:
+    # === NAIVE BASELINE ===
+    - name: "naive_zero"
+      model:
+        type: "naive_zero"
+        hidden_size: 1
+        num_layers: 1
+        dropout: 0.0
+
+    # === BASELINE MODELS ===
+    - name: "real_lstm"
+      model:
+        type: "real_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "real_lstm_attention"
+      model:
+        type: "real_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    # === PARAMETER-MATCHED QUATERNION MODELS ===
+    - name: "quaternion_lstm_param_matched"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+    - name: "quaternion_lstm_attention_param_matched"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+    # === LAYER-MATCHED QUATERNION MODELS ===
+    - name: "quaternion_lstm"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+    - name: "quaternion_lstm_attention"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+# Output settings
+output:
+  results_dir: "experiments/results/daily_btc_single"
+  save_predictions: true
+  save_attention_weights: true

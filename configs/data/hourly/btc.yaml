@@ -1,0 +1,64 @@
+# Configuration for Quaternion Neural Networks
+# Bitcoin (BTC-USD) Hourly Forecasting Project
+
+# Data settings
+data:
+  # Data source
+  ticker: "BTC-USD"  # Bitcoin/USD
+  interval: "1h"  # Hourly data
+  # Use period for rolling window (Yahoo Finance hourly limit: ~730 days)
+  period: "730d"
+  cache_dir: "data/cache"
+
+  # Window settings
+  # 72 bars = 3 days for 24/7 markets (Bitcoin)
+  # 24 bars/day
+  window_size: 72
+  target_col: 3  # Close price
+
+  # Split ratios (70/10/20)
+  train_ratio: 0.70
+  val_ratio: 0.10
+  test_ratio: 0.20
+  # Expected data points: ~17,520 total
+  # Train: ~12,250 | Val: ~1,750 | Test: ~3,500
+
+# Model settings
+model:
+  type: "real_lstm"  # Options: real_lstm, real_lstm_attention, quaternion_lstm, quaternion_lstm_attention
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.1
+
+# Training settings
+training:
+  batch_size: 32
+  num_epochs: 100
+  learning_rate: 0.001
+  patience: 10  # Early stopping patience
+  seed: 42
+  # Gradient clipping for training stability
+  max_grad_norm: 1.0
+  # Learning rate scheduler (optional)
+  scheduler:
+    type: "reduce_on_plateau"
+    factor: 0.5
+    patience: 5
+
+# Evaluation settings
+evaluation:
+  metrics:
+    - mape
+    - directional_accuracy
+    - sharpe_ratio
+    - directional_accuracy_3class
+    - sharpe_ratio_3class
+  flat_threshold_fraction: 0.5
+
+# Device settings
+device: "cuda"  # Options: cuda, cpu, mps
+
+# Output settings
+output:
+  results_dir: "experiments/results/hourly_btc"
+  checkpoint_dir: "checkpoints/hourly_btc"
