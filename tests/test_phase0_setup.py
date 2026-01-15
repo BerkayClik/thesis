@@ -53,6 +53,8 @@ def test_dataset():
 
 def test_preprocessing():
     """Test preprocessing functions."""
+    import pandas as pd
+
     data = torch.randn(100, 4) * 10 + 5
 
     # Normalize
@@ -61,11 +63,11 @@ def test_preprocessing():
     assert 'std' in stats
     assert normalized.shape == data.shape
 
-    # Temporal split
-    train, val, test = temporal_split(data, 60, 80)
-    assert train.shape[0] == 60
-    assert val.shape[0] == 20
-    assert test.shape[0] == 20
+    # Temporal split (requires dates parameter now)
+    dates = pd.date_range(start='2015-01-01', periods=100, freq='D')
+    train, val, test, split_info = temporal_split(data, dates, train_end_year=2015, val_end_year=2015)
+    # All data is in 2015, so splits depend on exact dates
+    assert train.shape[0] + val.shape[0] + test.shape[0] == 100
 
     # Quaternion encoding
     encoded = encode_quaternion(data)

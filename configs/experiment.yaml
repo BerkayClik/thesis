@@ -7,31 +7,35 @@ experiment:
   description: "Compare real-valued and quaternion LSTM models"
   seeds: [42, 123, 456]  # Multiple seeds for statistical significance
 
-# Model variants to test
-variants:
-  - name: "real_lstm"
-    model:
-      type: "real_lstm"
-      hidden_size: 64
-      num_layers: 2
+  # Model variants to test
+  variants:
+    - name: "real_lstm"
+      model:
+        type: "real_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
 
-  - name: "real_lstm_attention"
-    model:
-      type: "real_lstm_attention"
-      hidden_size: 64
-      num_layers: 2
+    - name: "real_lstm_attention"
+      model:
+        type: "real_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
 
-  - name: "quaternion_lstm"
-    model:
-      type: "quaternion_lstm"
-      hidden_size: 64
-      num_layers: 2
+    - name: "quaternion_lstm"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 16
+        num_layers: 1
+        dropout: 0.0
 
-  - name: "quaternion_lstm_attention"
-    model:
-      type: "quaternion_lstm_attention"
-      hidden_size: 64
-      num_layers: 2
+    - name: "quaternion_lstm_attention"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 16
+        num_layers: 1
+        dropout: 0.0
 
 # Ablation studies
 ablation:
