@@ -27,8 +27,8 @@ from src.models.qnn_attention_model import QuaternionLSTMNoAttention
 from src.training.trainer import Trainer
 from src.training.losses import mse_loss
 from src.evaluation.metrics import compute_mae, compute_mse
-from src.evaluation.directional_accuracy import compute_directional_accuracy
-from src.evaluation.sharpe_ratio import compute_sharpe_ratio
+from src.evaluation.directional_accuracy import compute_directional_accuracy, compute_directional_accuracy_returns
+from src.evaluation.sharpe_ratio import compute_sharpe_ratio, compute_sharpe_ratio_returns
 
 
 def load_config(config_path: str) -> Dict:
@@ -119,57 +119,67 @@ def evaluate_model(
     model,
     dataloader: DataLoader,
     device: torch.device,
-    norm_stats: Dict = None
+    norm_stats: Dict = None,
+    predict_returns: bool = True
 ) -> Dict:
     """
     Evaluate model on a dataset.
 
-    Returns dict with MAE, MSE, and directional accuracy.
-    Directional accuracy and Sharpe ratio are computed on denormalized values
-    to reflect true price movements.
+    Returns dict with MAE, MSE, directional accuracy, and Sharpe ratio.
 
     Args:
         model: The model to evaluate.
         dataloader: DataLoader for the evaluation dataset.
         device: Compute device.
-        norm_stats: Normalization statistics for denormalizing metrics.
+        norm_stats: Normalization statistics (only used when predict_returns=False).
+        predict_returns: If True, targets are returns and use return-based metrics.
     """
     model.eval()
     all_preds = []
     all_targets = []
-    all_prevs = []
 
     with torch.no_grad():
         for x, y in dataloader:
             x = x.to(device)
             pred = model(x).squeeze().cpu()
-            prev = x[:, -1, 3].cpu()  # Last close price in window
-
             all_preds.append(pred)
             all_targets.append(y)
-            all_prevs.append(prev)
 
     preds = torch.cat(all_preds)
     targets = torch.cat(all_targets)
-    prevs = torch.cat(all_prevs)
 
-    # Denormalize for directional accuracy and Sharpe ratio computation
-    # These metrics need real price values to be meaningful
-    if norm_stats is not None:
-        preds_denorm = denormalize(preds, norm_stats, col=3)
-        targets_denorm = denormalize(targets, norm_stats, col=3)
-        prevs_denorm = denormalize(prevs, norm_stats, col=3)
+    if predict_returns:
+        # Targets are returns - use return-based metrics directly
+        return {
+            'mae': compute_mae(preds, targets),
+            'mse': compute_mse(preds, targets),
+            'directional_accuracy': compute_directional_accuracy_returns(preds, targets),
+            'sharpe_ratio': compute_sharpe_ratio_returns(preds, targets)
+        }
     else:
-        preds_denorm = preds
-        targets_denorm = targets
-        prevs_denorm = prevs
+        # Legacy: targets are prices - need previous values and denormalization
+        all_prevs = []
+        with torch.no_grad():
+            for x, y in dataloader:
+                prev = x[:, -1, 3].cpu()
+                all_prevs.append(prev)
+        prevs = torch.cat(all_prevs)
 
-    return {
-        'mae': compute_mae(preds, targets),
-        'mse': compute_mse(preds, targets),
-        'directional_accuracy': compute_directional_accuracy(preds_denorm, targets_denorm, prevs_denorm),
-        'sharpe_ratio': compute_sharpe_ratio(preds_denorm, targets_denorm, prevs_denorm)
-    }
+        if norm_stats is not None:
+            preds_denorm = denormalize(preds, norm_stats, col=3)
+            targets_denorm = denormalize(targets, norm_stats, col=3)
+            prevs_denorm = denormalize(prevs, norm_stats, col=3)
+        else:
+            preds_denorm = preds
+            targets_denorm = targets
+            prevs_denorm = prevs
+
+        return {
+            'mae': compute_mae(preds, targets),
+            'mse': compute_mse(preds, targets),
+            'directional_accuracy': compute_directional_accuracy(preds_denorm, targets_denorm, prevs_denorm),
+            'sharpe_ratio': compute_sharpe_ratio(preds_denorm, targets_denorm, prevs_denorm)
+        }
 
 
 def run_single_experiment(
@@ -182,7 +192,9 @@ def run_single_experiment(
     device: torch.device,
     norm_stats: Dict = None,
     verbose: bool = True,
-    debug: bool = False
+    debug: bool = False,
+    variant_name: str = "default",
+    predict_returns: bool = True
 ) -> Dict:
     """
     Run a single experiment with one model configuration and seed.
@@ -210,13 +222,19 @@ def run_single_experiment(
         lr=config['training']['learning_rate']
     )
 
-    # Trainer
+    # Trainer - use unique checkpoint dir per variant and seed to avoid conflicts
+    checkpoint_dir = os.path.join(
+        config.get('output', {}).get('results_dir', 'experiments/results'),
+        'checkpoints',
+        variant_name,
+        f'seed_{seed}'
+    )
     trainer = Trainer(
         model=model,
         optimizer=optimizer,
         loss_fn=mse_loss,
         device=device,
-        checkpoint_dir=os.path.join(config.get('output', {}).get('results_dir', 'experiments/results'), 'checkpoints'),
+        checkpoint_dir=checkpoint_dir,
         debug=debug
     )
 
@@ -243,7 +261,7 @@ def run_single_experiment(
             print(f"    Warning: No checkpoint found, using current model state")
 
     # Evaluate on test set
-    test_metrics = evaluate_model(model, test_loader, device, norm_stats)
+    test_metrics = evaluate_model(model, test_loader, device, norm_stats, predict_returns)
 
     result = {
         'seed': seed,
@@ -302,11 +320,12 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
     test_data = processed['test_data']
     norm_stats = processed['norm_stats']
 
-    # Create datasets
+    # Create datasets with return-based targets
     window_size = config['data']['window_size']
-    train_dataset = SP500Dataset(train_data, window_size=window_size)
-    val_dataset = SP500Dataset(val_data, window_size=window_size)
-    test_dataset = SP500Dataset(test_data, window_size=window_size)
+    predict_returns = config['data'].get('predict_returns', True)
+    train_dataset = SP500Dataset(train_data, window_size=window_size, predict_returns=predict_returns)
+    val_dataset = SP500Dataset(val_data, window_size=window_size, predict_returns=predict_returns)
+    test_dataset = SP500Dataset(test_data, window_size=window_size, predict_returns=predict_returns)
 
     # Create data loaders
     batch_size = config['training']['batch_size']
@@ -340,7 +359,9 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
                 device=device,
                 norm_stats=norm_stats,
                 verbose=verbose,
-                debug=debug
+                debug=debug,
+                variant_name=variant_name,
+                predict_returns=predict_returns
             )
             variant_results.append(result)
 

@@ -305,9 +305,9 @@ class TestDataset:
         torch.testing.assert_close(x, expected_x)
 
     def test_dataset_target_is_next_close(self):
-        """Verify target is the close price at t+window_size."""
+        """Verify target is the close price at t+window_size (when predict_returns=False)."""
         data = torch.arange(100).float().unsqueeze(1).expand(-1, 4)
-        dataset = SP500Dataset(data, window_size=5, target_col=3)
+        dataset = SP500Dataset(data, window_size=5, target_col=3, predict_returns=False)
 
         x, y = dataset[10]
         # Target should be the close price at step 15
@@ -316,12 +316,51 @@ class TestDataset:
     def test_dataset_no_look_ahead(self):
         """Verify target is not included in input window."""
         data = torch.arange(100).float().unsqueeze(1).expand(-1, 4)
-        dataset = SP500Dataset(data, window_size=5)
+        dataset = SP500Dataset(data, window_size=5, predict_returns=False)
 
         x, y = dataset[10]
         # Window should be [10, 11, 12, 13, 14], target should be 15
         # Check that target value is not in the window
         assert y not in x[:, 0]
+
+    def test_dataset_returns_computation(self):
+        """Verify return target is computed correctly."""
+        # Create predictable data where we know the return
+        data = torch.tensor([
+            [100.0, 101.0, 99.0, 100.0],   # Close = 100
+            [101.0, 102.0, 100.0, 101.0],  # Close = 101
+            [102.0, 103.0, 101.0, 103.0],  # Close = 103 (target)
+        ])
+        dataset = SP500Dataset(data, window_size=2, predict_returns=True)
+        x, y = dataset[0]
+
+        # Expected return: (103 - 101) / 101 ≈ 0.0198
+        expected_return = (103.0 - 101.0) / 101.0
+        torch.testing.assert_close(y, torch.tensor(expected_return), rtol=1e-5, atol=1e-5)
+
+    def test_dataset_returns_backward_compatible(self):
+        """Verify predict_returns=False maintains legacy behavior."""
+        data = torch.randn(100, 4)
+        dataset = SP500Dataset(data, window_size=20, predict_returns=False)
+        x, y = dataset[0]
+        # Target should be the next close price directly
+        expected_y = data[20, 3]
+        torch.testing.assert_close(y, expected_y)
+
+    def test_dataset_returns_default_is_true(self):
+        """Verify predict_returns defaults to True."""
+        data = torch.tensor([
+            [100.0, 101.0, 99.0, 100.0],
+            [101.0, 102.0, 100.0, 102.0],  # prev_close = 102
+            [103.0, 104.0, 102.0, 105.0],  # next_close = 105
+        ])
+        # Don't explicitly set predict_returns, should default to True
+        dataset = SP500Dataset(data, window_size=2)
+        x, y = dataset[0]
+
+        # Target should be return: (105 - 102) / 102
+        expected_return = (105.0 - 102.0) / 102.0
+        torch.testing.assert_close(y, torch.tensor(expected_return), rtol=1e-5, atol=1e-5)
 
 
 class TestDataPipelineIntegration:

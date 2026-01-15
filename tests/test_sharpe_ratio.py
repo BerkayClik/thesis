@@ -4,7 +4,8 @@ Tests for Sharpe Ratio computation.
 
 import pytest
 import torch
-from src.evaluation.sharpe_ratio import compute_sharpe_ratio
+from src.evaluation.sharpe_ratio import compute_sharpe_ratio, compute_sharpe_ratio_returns
+from src.evaluation.directional_accuracy import compute_directional_accuracy_returns
 
 
 class TestSharpeRatio:
@@ -111,3 +112,96 @@ class TestSharpeRatio:
 
         sharpe = compute_sharpe_ratio(pred, target, prev)
         assert isinstance(sharpe, float)
+
+
+class TestSharpeRatioReturns:
+    """Tests for return-based Sharpe Ratio computation."""
+
+    def test_perfect_prediction_positive_sharpe(self):
+        """Perfect predictions should yield positive Sharpe Ratio."""
+        # Predicted returns match actual returns
+        pred_return = torch.tensor([0.01, 0.02, -0.01, 0.015])
+        target_return = torch.tensor([0.01, 0.02, -0.01, 0.015])
+
+        sharpe = compute_sharpe_ratio_returns(pred_return, target_return)
+        assert sharpe > 0
+
+    def test_opposite_prediction_negative_sharpe(self):
+        """Opposite predictions should yield negative Sharpe Ratio."""
+        # Predicted direction is always wrong
+        pred_return = torch.tensor([0.01, 0.02, -0.01, 0.015])
+        target_return = torch.tensor([-0.01, -0.02, 0.01, -0.015])
+
+        sharpe = compute_sharpe_ratio_returns(pred_return, target_return)
+        assert sharpe < 0
+
+    def test_zero_std_returns_zero(self):
+        """Zero std of returns should return 0."""
+        # All same returns
+        pred_return = torch.tensor([0.01, 0.01, 0.01])
+        target_return = torch.tensor([0.01, 0.01, 0.01])
+
+        sharpe = compute_sharpe_ratio_returns(pred_return, target_return)
+        assert sharpe == 0.0
+
+    def test_output_is_float(self):
+        """Output should be a Python float."""
+        pred_return = torch.tensor([0.01, -0.02])
+        target_return = torch.tensor([0.01, -0.02])
+
+        sharpe = compute_sharpe_ratio_returns(pred_return, target_return)
+        assert isinstance(sharpe, float)
+
+    def test_annualization_factor(self):
+        """Annualization factor should scale the Sharpe Ratio."""
+        pred_return = torch.tensor([0.01, 0.02, -0.005, 0.015])
+        target_return = torch.tensor([0.01, 0.02, -0.005, 0.015])
+
+        sharpe_daily = compute_sharpe_ratio_returns(pred_return, target_return, annualization_factor=1.0)
+        sharpe_annual = compute_sharpe_ratio_returns(pred_return, target_return, annualization_factor=15.87)
+
+        assert pytest.approx(sharpe_annual / sharpe_daily, rel=0.01) == 15.87
+
+
+class TestDirectionalAccuracyReturns:
+    """Tests for return-based directional accuracy computation."""
+
+    def test_perfect_prediction_100_percent(self):
+        """Perfect predictions should yield 100% accuracy."""
+        pred_return = torch.tensor([0.01, 0.02, -0.01, -0.02])
+        target_return = torch.tensor([0.01, 0.02, -0.01, -0.02])
+
+        accuracy = compute_directional_accuracy_returns(pred_return, target_return)
+        assert accuracy == 100.0
+
+    def test_opposite_prediction_0_percent(self):
+        """Always-wrong predictions should yield 0% accuracy."""
+        pred_return = torch.tensor([0.01, 0.02, -0.01, -0.02])
+        target_return = torch.tensor([-0.01, -0.02, 0.01, 0.02])
+
+        accuracy = compute_directional_accuracy_returns(pred_return, target_return)
+        assert accuracy == 0.0
+
+    def test_half_correct_50_percent(self):
+        """Half correct predictions should yield 50% accuracy."""
+        pred_return = torch.tensor([0.01, 0.02, 0.01, 0.02])  # All positive
+        target_return = torch.tensor([0.01, 0.02, -0.01, -0.02])  # Half positive
+
+        accuracy = compute_directional_accuracy_returns(pred_return, target_return)
+        assert accuracy == 50.0
+
+    def test_returns_percentage(self):
+        """Output should be in percentage (0-100)."""
+        pred_return = torch.tensor([0.01, 0.02])
+        target_return = torch.tensor([0.01, 0.02])
+
+        accuracy = compute_directional_accuracy_returns(pred_return, target_return)
+        assert 0.0 <= accuracy <= 100.0
+
+    def test_output_is_float(self):
+        """Output should be a Python float."""
+        pred_return = torch.tensor([0.01, -0.02])
+        target_return = torch.tensor([0.01, -0.02])
+
+        accuracy = compute_directional_accuracy_returns(pred_return, target_return)
+        assert isinstance(accuracy, float)

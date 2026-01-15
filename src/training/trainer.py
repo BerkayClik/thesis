@@ -49,7 +49,7 @@ def compute_weight_stats(model: nn.Module) -> Dict[str, Dict[str, float]]:
         data = param.data
         stats[name] = {
             'mean': data.mean().item(),
-            'std': data.std().item(),
+            'std': data.std(unbiased=False).item() if data.numel() > 1 else 0.0,
             'min': data.min().item(),
             'max': data.max().item(),
             'norm': data.norm(2).item()
