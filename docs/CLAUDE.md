@@ -1,5 +1,21 @@
 # CLAUDE.md
 
+## Environment Setup
+
+**IMPORTANT:** This project uses a dedicated pyenv virtual environment.
+
+- **Python Environment:** `thesis` (pyenv virtualenv)
+- **Python Version:** 3.13.3
+- **Activation:** The `.python-version` file in the project root automatically activates the environment
+- **Always use `python` command** - pyenv will automatically use the correct environment when in this directory
+
+### Installing Dependencies
+```bash
+pip install torch pyyaml pandas numpy
+```
+
+---
+
 ## General Rules
 - Follow SPEC.md strictly
 - Do not introduce extra features, indicators, or datasets

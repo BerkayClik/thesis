@@ -1,0 +1,108 @@
+"""
+Quaternion operations module.
+
+Provides fundamental quaternion operations for neural networks.
+"""
+
+import torch
+import torch.nn as nn
+
+
+def hamilton_product(p: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+    """
+    Compute Hamilton product of two quaternions.
+
+    For quaternions p = (a, b, c, d) and q = (e, f, g, h):
+    p * q = (ae - bf - cg - dh,
+             af + be + ch - dg,
+             ag - bh + ce + df,
+             ah + bg - cf + de)
+
+    Args:
+        p: Quaternion tensor of shape (..., 4).
+        q: Quaternion tensor of shape (..., 4).
+
+    Returns:
+        Hamilton product of shape (..., 4).
+    """
+    # Extract components
+    a, b, c, d = p[..., 0], p[..., 1], p[..., 2], p[..., 3]
+    e, f, g, h = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+
+    # Compute Hamilton product components
+    r = a * e - b * f - c * g - d * h
+    i = a * f + b * e + c * h - d * g
+    j = a * g - b * h + c * e + d * f
+    k = a * h + b * g - c * f + d * e
+
+    return torch.stack([r, i, j, k], dim=-1)
+
+
+def quaternion_conjugate(q: torch.Tensor) -> torch.Tensor:
+    """
+    Compute quaternion conjugate.
+
+    For q = (a, b, c, d), conjugate is (a, -b, -c, -d).
+
+    Args:
+        q: Quaternion tensor of shape (..., 4).
+
+    Returns:
+        Conjugate quaternion of shape (..., 4).
+    """
+    return torch.stack([q[..., 0], -q[..., 1], -q[..., 2], -q[..., 3]], dim=-1)
+
+
+def quaternion_norm(q: torch.Tensor) -> torch.Tensor:
+    """
+    Compute quaternion norm.
+
+    ||q|| = sqrt(a^2 + b^2 + c^2 + d^2)
+
+    Args:
+        q: Quaternion tensor of shape (..., 4).
+
+    Returns:
+        Norm tensor of shape (...).
+    """
+    return torch.norm(q, dim=-1)
+
+
+class QuaternionLinear(nn.Module):
+    """
+    Quaternion linear layer using Hamilton product.
+
+    Args:
+        in_features: Number of input quaternion features.
+        out_features: Number of output quaternion features.
+    """
+
+    def __init__(self, in_features: int, out_features: int):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        # Weight quaternion for each input-output pair
+        # Shape: (out_features, in_features, 4)
+        self.weight = nn.Parameter(torch.randn(out_features, in_features, 4) * 0.01)
+        self.bias = nn.Parameter(torch.zeros(out_features, 4))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass using Hamilton product.
+
+        Args:
+            x: Input of shape (batch, in_features, 4).
+
+        Returns:
+            Output of shape (batch, out_features, 4).
+        """
+        batch_size = x.size(0)
+        output = torch.zeros(batch_size, self.out_features, 4, device=x.device, dtype=x.dtype)
+
+        for j in range(self.out_features):
+            for i in range(self.in_features):
+                output[:, j] = output[:, j] + hamilton_product(x[:, i], self.weight[j, i])
+            output[:, j] = output[:, j] + self.bias[j]
+
+        return output

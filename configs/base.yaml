@@ -1,0 +1,38 @@
+# Base configuration for Quaternion Neural Networks
+# S&P 500 Forecasting Project
+
+# Data settings
+data:
+  window_size: 20
+  target_col: 3  # Close price
+  train_end_year: 2018
+  val_end_year: 2021
+  # Split periods:
+  # Train: 2000-2018
+  # Val: 2019-2021
+  # Test: 2022-2024
+
+# Model settings
+model:
+  type: "real_lstm"  # Options: real_lstm, real_lstm_attention, quaternion_lstm, quaternion_lstm_attention
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.1
+
+# Training settings
+training:
+  batch_size: 32
+  num_epochs: 100
+  learning_rate: 0.001
+  patience: 10  # Early stopping patience
+  seed: 42
+
+# Evaluation settings
+evaluation:
+  metrics:
+    - mae
+    - mse
+    - directional_accuracy
+
+# Device settings
+device: "cuda"  # Options: cuda, cpu, mps

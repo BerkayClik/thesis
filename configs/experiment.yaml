@@ -1,0 +1,63 @@
+# Experiment configuration
+# Extends base.yaml with experiment-specific settings
+
+# Experiment identification
+experiment:
+  name: "baseline_comparison"
+  description: "Compare real-valued and quaternion LSTM models"
+  seeds: [42, 123, 456]  # Multiple seeds for statistical significance
+
+# Model variants to test
+variants:
+  - name: "real_lstm"
+    model:
+      type: "real_lstm"
+      hidden_size: 64
+      num_layers: 2
+
+  - name: "real_lstm_attention"
+    model:
+      type: "real_lstm_attention"
+      hidden_size: 64
+      num_layers: 2
+
+  - name: "quaternion_lstm"
+    model:
+      type: "quaternion_lstm"
+      hidden_size: 64
+      num_layers: 2
+
+  - name: "quaternion_lstm_attention"
+    model:
+      type: "quaternion_lstm_attention"
+      hidden_size: 64
+      num_layers: 2
+
+# Ablation studies
+ablation:
+  # Real vs Quaternion comparison
+  encoding_comparison:
+    enabled: true
+    models:
+      - "real_lstm"
+      - "quaternion_lstm"
+
+  # Attention vs No Attention
+  attention_comparison:
+    enabled: true
+    models:
+      - "quaternion_lstm"
+      - "quaternion_lstm_attention"
+
+  # Frequency sensitivity (if hourly data available)
+  frequency_comparison:
+    enabled: false
+    frequencies:
+      - "daily"
+      - "hourly"
+
+# Output settings
+output:
+  results_dir: "experiments/results"
+  save_predictions: true
+  save_attention_weights: true
