@@ -36,8 +36,9 @@ def compute_sharpe_ratio(
     # Compute actual returns (percentage change)
     actual_returns = (target - prev) / (prev.abs() + 1e-8)
 
-    # Compute predicted direction
+    # Compute predicted direction (default to long if no change predicted)
     pred_direction = torch.sign(pred - prev)
+    pred_direction = torch.where(pred_direction == 0, torch.ones_like(pred_direction), pred_direction)
 
     # Strategy returns: actual returns when direction is correct, negative otherwise
     strategy_returns = pred_direction * actual_returns
