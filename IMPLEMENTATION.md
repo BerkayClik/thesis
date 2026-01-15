@@ -70,20 +70,26 @@ q_t = O_t + H_t * i + L_t * j + C_t * k
 ```
 
 ### Tasks
-- [ ] Download/load S&P 500 OHLC data (2000–2024)
-- [ ] Implement `src/data/dataset.py`
-  - [ ] Sliding window dataset class
-  - [ ] Configurable window size
-  - [ ] Returns (X, y) pairs where y is next-step close
-- [ ] Implement `src/data/preprocessing.py`
-  - [ ] Z-score normalization using train-only statistics
-  - [ ] Temporal split function (no shuffling)
-  - [ ] Quaternion encoding function
-- [ ] Verify no look-ahead bias in data pipeline
-- [ ] Unit tests for data loading and splitting
+- [x] Download/load S&P 500 OHLC data (2000–2024)
+- [x] Implement `src/data/dataset.py`
+  - [x] Sliding window dataset class
+  - [x] Configurable window size
+  - [x] Returns (X, y) pairs where y is next-step close
+- [x] Implement `src/data/preprocessing.py`
+  - [x] Z-score normalization using train-only statistics
+  - [x] Temporal split function (no shuffling)
+  - [x] Quaternion encoding function
+- [x] Verify no look-ahead bias in data pipeline
+- [x] Unit tests for data loading and splitting
 
 **Notes:**
 ```
+- Added src/data/loader.py for yfinance data downloading with caching support
+- Updated temporal_split to use year-based boundaries (train<=2018, val=2019-2021, test>=2022)
+- Added preprocess_data() convenience function for complete pipeline
+- Created comprehensive pytest test suite (tests/test_phase1_data.py) with 28 tests
+- All tests verify no look-ahead bias in normalization and splitting
+- Updated configs/base.yaml with data source configuration (ticker, dates, cache_dir)
 ```
 
 ---
@@ -287,7 +293,7 @@ Input (OHLC) → Quaternion Encoding → Quaternion LSTM → Projection → Temp
 | Phase | Description           | Status |
 |-------|-----------------------|--------|
 | 0     | Setup                 | [x]    |
-| 1     | Data Pipeline         | [ ]    |
+| 1     | Data Pipeline         | [x]    |
 | 2     | Baseline Models       | [ ]    |
 | 3     | Quaternion Core       | [ ]    |
 | 4     | Quaternion LSTM       | [ ]    |
@@ -302,6 +308,7 @@ Input (OHLC) → Quaternion Encoding → Quaternion LSTM → Projection → Temp
 | Date | Phase | Change Description |
 |------|-------|--------------------|
 | 2026-01-15 | 0 | Completed Phase 0 setup: directory structure, placeholder files, config system, training loop verification |
+| 2026-01-15 | 1 | Completed Phase 1 data pipeline: yfinance loader, year-based temporal split, preprocessing pipeline, 28 pytest tests |
 
 ---
 
