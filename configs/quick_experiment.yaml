@@ -1,0 +1,58 @@
+# Quick iteration experiment configuration
+# All 6 models, 1 seed for faster iteration (~10-15 min on Colab CUDA)
+
+experiment:
+  name: "quick_iteration"
+  description: "Quick iteration mode - all models with single seed"
+  seeds: [42]  # 1 seed instead of 3 (3x faster)
+
+  variants:
+    # === BASELINE MODELS ===
+    - name: "real_lstm"
+      model:
+        type: "real_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "real_lstm_attention"
+      model:
+        type: "real_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    # === LAYER-MATCHED QUATERNION MODELS ===
+    - name: "quaternion_lstm"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "quaternion_lstm_attention"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    # === PARAMETER-MATCHED MODELS ===
+    - name: "quaternion_lstm_param_matched"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "quaternion_lstm_attention_param_matched"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+
+output:
+  results_dir: "experiments/results"
+  save_predictions: true
+  save_attention_weights: true
