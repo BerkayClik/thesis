@@ -27,7 +27,7 @@ from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel
 from src.models.qnn_attention_model import QuaternionLSTMNoAttention
 from src.training.trainer import Trainer
 from src.training.losses import mse_loss
-from src.evaluation.metrics import compute_mae, compute_mse, compute_mape
+from src.evaluation.metrics import compute_mae, compute_mse
 from src.evaluation.directional_accuracy import compute_directional_accuracy, compute_directional_accuracy_returns
 from src.evaluation.sharpe_ratio import compute_sharpe_ratio, compute_sharpe_ratio_returns
 
@@ -102,9 +102,24 @@ def get_device(config: Dict) -> torch.device:
     return torch.device(device_name)
 
 
+class NaiveBaseline(torch.nn.Module):
+    """Naive baseline that always predicts zero return."""
+
+    def __init__(self):
+        super().__init__()
+        # Dummy parameter so optimizer doesn't complain
+        self.dummy = torch.nn.Parameter(torch.zeros(1), requires_grad=False)
+
+    def forward(self, x):
+        batch_size = x.size(0)
+        return torch.zeros(batch_size, device=x.device)
+
+
 def create_model(model_type: str, hidden_size: int, num_layers: int, dropout: float = 0.0):
     """Create model based on type string."""
-    if model_type == "real_lstm":
+    if model_type == "naive_zero":
+        return NaiveBaseline()
+    elif model_type == "real_lstm":
         return RealLSTM(
             input_size=4,
             hidden_size=hidden_size,
@@ -167,7 +182,7 @@ def compute_statistical_significance(
         return {}
 
     significance_results = {}
-    metrics = ['mae', 'mse', 'mape', 'directional_accuracy', 'sharpe_ratio']
+    metrics = ['mae', 'mse', 'directional_accuracy', 'sharpe_ratio']
 
     # Get baseline values
     baseline_runs = results[baseline_model]['individual_runs']
@@ -251,10 +266,10 @@ def evaluate_model(
 
     if predict_returns:
         # Targets are returns - use return-based metrics directly
+        # Note: MAPE excluded as it's meaningless for near-zero return values
         return {
             'mae': compute_mae(preds, targets),
             'mse': compute_mse(preds, targets),
-            'mape': compute_mape(preds, targets),
             'directional_accuracy': compute_directional_accuracy_returns(preds, targets),
             'sharpe_ratio': compute_sharpe_ratio_returns(preds, targets)
         }
@@ -279,7 +294,6 @@ def evaluate_model(
         return {
             'mae': compute_mae(preds, targets),
             'mse': compute_mse(preds, targets),
-            'mape': compute_mape(preds, targets),
             'directional_accuracy': compute_directional_accuracy(preds_denorm, targets_denorm, prevs_denorm),
             'sharpe_ratio': compute_sharpe_ratio(preds_denorm, targets_denorm, prevs_denorm)
         }
@@ -331,57 +345,64 @@ def run_single_experiment(
     if verbose:
         print(f"    Model parameters: {num_params:,}")
 
-    # Optimizer
-    optimizer = torch.optim.Adam(
-        model.parameters(),
-        lr=config['training']['learning_rate']
-    )
-
-    # Trainer - use unique checkpoint dir per variant and seed to avoid conflicts
-    checkpoint_dir = os.path.join(
-        config.get('output', {}).get('results_dir', 'experiments/results'),
-        'checkpoints',
-        variant_name,
-        f'seed_{seed}'
-    )
-
-    # Training stability settings from config
-    training_config = config.get('training', {})
-    max_grad_norm = training_config.get('max_grad_norm', 1.0)
-    scheduler_config = training_config.get('scheduler', None)
-
-    trainer = Trainer(
-        model=model,
-        optimizer=optimizer,
-        loss_fn=mse_loss,
-        device=device,
-        checkpoint_dir=checkpoint_dir,
-        max_grad_norm=max_grad_norm,
-        scheduler_config=scheduler_config,
-        debug=debug
-    )
-
-    # Train
-    if verbose:
-        print(f"  Training with seed {seed}...")
-
-    history = trainer.train(
-        train_loader=train_loader,
-        val_loader=val_loader,
-        num_epochs=config['training']['num_epochs'],
-        patience=config['training']['patience'],
-        verbose=False
-    )
-
-    # Load best model for evaluation
-    checkpoint_path = os.path.join(trainer.checkpoint_dir, 'best_model.pt')
-    if os.path.exists(checkpoint_path):
-        trainer.load_checkpoint('best_model.pt')
+    # Skip training for naive baseline (no trainable parameters)
+    if model_config['type'] == 'naive_zero':
         if verbose:
-            print(f"    Loaded best model checkpoint")
+            print(f"  Evaluating naive baseline (no training)...")
+        model.to(device)
+        history = {'train_loss': [], 'val_loss': [], 'best_epoch': 0}
     else:
+        # Optimizer
+        optimizer = torch.optim.Adam(
+            model.parameters(),
+            lr=config['training']['learning_rate']
+        )
+
+        # Trainer - use unique checkpoint dir per variant and seed to avoid conflicts
+        checkpoint_dir = os.path.join(
+            config.get('output', {}).get('results_dir', 'experiments/results'),
+            'checkpoints',
+            variant_name,
+            f'seed_{seed}'
+        )
+
+        # Training stability settings from config
+        training_config = config.get('training', {})
+        max_grad_norm = training_config.get('max_grad_norm', 1.0)
+        scheduler_config = training_config.get('scheduler', None)
+
+        trainer = Trainer(
+            model=model,
+            optimizer=optimizer,
+            loss_fn=mse_loss,
+            device=device,
+            checkpoint_dir=checkpoint_dir,
+            max_grad_norm=max_grad_norm,
+            scheduler_config=scheduler_config,
+            debug=debug
+        )
+
+        # Train
         if verbose:
-            print(f"    Warning: No checkpoint found, using current model state")
+            print(f"  Training with seed {seed}...")
+
+        history = trainer.train(
+            train_loader=train_loader,
+            val_loader=val_loader,
+            num_epochs=config['training']['num_epochs'],
+            patience=config['training']['patience'],
+            verbose=False
+        )
+
+        # Load best model for evaluation
+        checkpoint_path = os.path.join(trainer.checkpoint_dir, 'best_model.pt')
+        if os.path.exists(checkpoint_path):
+            trainer.load_checkpoint('best_model.pt')
+            if verbose:
+                print(f"    Loaded best model checkpoint")
+        else:
+            if verbose:
+                print(f"    Warning: No checkpoint found, using current model state")
 
     # Evaluate on test set
     test_metrics = evaluate_model(model, test_loader, device, norm_stats, predict_returns)
@@ -515,7 +536,6 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
         # Aggregate results
         test_maes = [r['test_metrics']['mae'] for r in variant_results]
         test_mses = [r['test_metrics']['mse'] for r in variant_results]
-        test_mapes = [r['test_metrics']['mape'] for r in variant_results]
         test_das = [r['test_metrics']['directional_accuracy'] for r in variant_results]
         test_sharpes = [r['test_metrics']['sharpe_ratio'] for r in variant_results]
 
@@ -524,7 +544,6 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
             'aggregated': {
                 'mae': {'mean': np.mean(test_maes), 'std': np.std(test_maes)},
                 'mse': {'mean': np.mean(test_mses), 'std': np.std(test_mses)},
-                'mape': {'mean': np.mean(test_mapes), 'std': np.std(test_mapes)},
                 'directional_accuracy': {'mean': np.mean(test_das), 'std': np.std(test_das)},
                 'sharpe_ratio': {'mean': np.mean(test_sharpes), 'std': np.std(test_sharpes)}
             }
@@ -534,7 +553,6 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
             print(f"  Results (mean ± std over {len(seeds)} seeds):")
             print(f"    MAE: {np.mean(test_maes):.4f} ± {np.std(test_maes):.4f}")
             print(f"    MSE: {np.mean(test_mses):.4f} ± {np.std(test_mses):.4f}")
-            print(f"    MAPE: {np.mean(test_mapes):.2f}% ± {np.std(test_mapes):.2f}%")
             print(f"    Dir Acc: {np.mean(test_das):.2f}% ± {np.std(test_das):.2f}%")
             print(f"    Sharpe: {np.mean(test_sharpes):.3f} ± {np.std(test_sharpes):.3f}")
 
@@ -552,41 +570,40 @@ def print_results_table(results: Dict):
     model_results = results.get('model_results', results)
     significance = results.get('statistical_significance', {})
 
-    print("\n" + "=" * 120)
+    print("\n" + "=" * 100)
     print("EXPERIMENT RESULTS")
-    print("=" * 120)
+    print("=" * 100)
 
     # Header
-    print(f"{'Model':<28} {'MAE':<18} {'MSE':<18} {'MAPE (%)':<18} {'Dir Acc (%)':<16} {'Sharpe':<16}")
-    print("-" * 120)
+    print(f"{'Model':<35} {'MAE':<18} {'MSE':<18} {'Dir Acc (%)':<16} {'Sharpe':<12}")
+    print("-" * 100)
 
     # Rows
     for model_name, model_data in model_results.items():
         agg = model_data['aggregated']
         mae_str = f"{agg['mae']['mean']:.4f} ± {agg['mae']['std']:.4f}"
         mse_str = f"{agg['mse']['mean']:.4f} ± {agg['mse']['std']:.4f}"
-        mape_str = f"{agg['mape']['mean']:.2f} ± {agg['mape']['std']:.2f}"
         da_str = f"{agg['directional_accuracy']['mean']:.2f} ± {agg['directional_accuracy']['std']:.2f}"
         sharpe_str = f"{agg['sharpe_ratio']['mean']:.3f} ± {agg['sharpe_ratio']['std']:.3f}"
-        print(f"{model_name:<28} {mae_str:<18} {mse_str:<18} {mape_str:<18} {da_str:<16} {sharpe_str:<16}")
+        print(f"{model_name:<35} {mae_str:<18} {mse_str:<18} {da_str:<16} {sharpe_str:<12}")
 
-    print("=" * 120)
+    print("=" * 100)
 
     # Print statistical significance if available
     if significance:
         print("\nSTATISTICAL SIGNIFICANCE (vs real_lstm baseline)")
-        print("-" * 120)
-        print(f"{'Model':<28} {'Metric':<20} {'p-value':<12} {'Cohens d':<12} {'Significant':<12}")
-        print("-" * 120)
+        print("-" * 100)
+        print(f"{'Model':<35} {'Metric':<24} {'p-value':<12} {'Cohens d':<12} {'Significant':<12}")
+        print("-" * 100)
 
         for model_name, metrics in significance.items():
             for metric, stats in metrics.items():
                 sig_marker = "**" if stats['significant_0.01'] else ("*" if stats['significant_0.05'] else "")
-                print(f"{model_name:<28} {metric:<20} {stats['p_value']:<12.4f} {stats['cohens_d']:<12.3f} {sig_marker:<12}")
+                print(f"{model_name:<35} {metric:<24} {stats['p_value']:<12.4f} {stats['cohens_d']:<12.3f} {sig_marker:<12}")
 
-        print("-" * 120)
+        print("-" * 100)
         print("* p < 0.05, ** p < 0.01")
-        print("=" * 120)
+        print("=" * 100)
 
 
 def save_results(results: Dict, output_dir: str, experiment_name: str):

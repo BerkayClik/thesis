@@ -11,6 +11,15 @@ experiment:
   # PRIMARY FOCUS: Parameter-matched comparisons for fair evaluation
   # Layer-matched variants included for completeness but have 4x more parameters
   variants:
+    # === NAIVE BASELINE ===
+    # Always predicts zero return - establishes minimum baseline
+    - name: "naive_zero"
+      model:
+        type: "naive_zero"
+        hidden_size: 1  # Ignored, just for compatibility
+        num_layers: 1
+        dropout: 0.0
+
     # === BASELINE MODELS ===
     - name: "real_lstm"
       model:

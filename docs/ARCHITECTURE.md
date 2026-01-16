@@ -502,18 +502,21 @@ class QNNAttentionModel(nn.Module):
 | Quaternion LSTM | Single quaternion | Hamilton product LSTM | Last timestep |
 | **Quaternion LSTM + Attention** | Single quaternion | Hamilton product LSTM | Learned weights |
 
-### 6 Experimental Variants
+### 7 Experimental Variants
 
-We run **6 variants** in experiments, not just 4. Why? Quaternion models have ~3-4x more parameters at the same hidden size. To ensure fair comparison, we test quaternion models in two configurations:
+We run **7 variants** in experiments. This includes a naive baseline plus 6 model variants. Quaternion models have ~3-4x more parameters at the same hidden size, so we test them in two configurations for fair comparison:
 
 | # | Variant Name | Architecture | Hidden | Purpose |
 |---|--------------|--------------|--------|---------|
+| 0 | `naive_zero` | Always predicts 0 | N/A | Naive baseline (no learning) |
 | 1 | `real_lstm` | Real LSTM | 64 | Baseline |
 | 2 | `real_lstm_attention` | Real LSTM + Attention | 64 | Baseline |
 | 3 | `quaternion_lstm` | Quaternion LSTM | 64 | Layer-matched |
 | 4 | `quaternion_lstm_attention` | Quaternion LSTM + Attention | 64 | Layer-matched |
 | 5 | `quaternion_lstm_param_matched` | Quaternion LSTM | 32 | Parameter-matched |
 | 6 | `quaternion_lstm_attention_param_matched` | Quaternion LSTM + Attention | 32 | Parameter-matched |
+
+**Naive baseline:** Always predicts zero return. Establishes that models are learning something meaningful (should achieve ~50% directional accuracy by chance).
 
 **Layer-matched (hidden=64):** Same architecture depth as real LSTM, but quaternion has more parameters. Tests if quaternion math itself helps.
 
@@ -543,10 +546,11 @@ Quaternion models have more parameters because each weight is 4D instead of 1D.
 
 The research question: **Does quaternion encoding help predict stock returns?**
 
+- Compare all models vs naive_zero → Verify models learn meaningful patterns
 - Compare Real LSTM vs Quaternion LSTM → Effect of quaternion encoding
 - Compare without attention vs with attention → Effect of temporal attention
 - Compare layer-matched vs parameter-matched → Is it the math or just more parameters?
-- Compare all 6 → Find the best combination
+- Compare all 7 → Find the best combination
 
 ---
 
@@ -808,6 +812,8 @@ After training completes, the **best checkpoint** is loaded and evaluated on the
 | MSE | `mean((pred - target)²)` | Penalizes large errors more heavily |
 | Directional Accuracy | `% where sign(pred) == sign(target)` | Did we predict up/down correctly? |
 | Sharpe Ratio | `mean(strategy_returns) / std(strategy_returns)` | Risk-adjusted trading performance |
+
+**Note:** MAPE (Mean Absolute Percentage Error) is intentionally excluded. When predicting returns (values near zero), MAPE becomes unstable due to division by near-zero values, producing meaningless results (e.g., 800%+ error).
 
 **Directional Accuracy:**
 ```python
