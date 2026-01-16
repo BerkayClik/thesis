@@ -314,7 +314,8 @@ def run_single_experiment(
     )
 
     # Compile model for faster execution (PyTorch 2.0+)
-    if hasattr(torch, 'compile'):
+    # Skip torch.compile on MPS - quaternion models exceed Metal shader buffer limits
+    if hasattr(torch, 'compile') and device.type != 'mps':
         try:
             model = torch.compile(model)
             if verbose:

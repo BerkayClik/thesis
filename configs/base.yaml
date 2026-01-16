@@ -1,11 +1,11 @@
 # Base configuration for Quaternion Neural Networks
-# S&P 500 Forecasting Project
+# Bitcoin (BTC-USD) Forecasting Project
 
 # Data settings
 data:
   # Data source
-  ticker: "^GSPC"
-  start_date: "2000-01-01"
+  ticker: "BTC-USD"
+  start_date: "2015-01-01"
   end_date: "2024-12-31"
   cache_dir: "data/cache"
 
@@ -14,12 +14,12 @@ data:
   target_col: 3  # Close price
 
   # Split periods (by year)
-  train_end_year: 2018
-  val_end_year: 2021
+  train_end_year: 2021
+  val_end_year: 2022
   # Split periods:
-  # Train: 2000-2018
-  # Val: 2019-2021
-  # Test: 2022-2024
+  # Train: 2015-2021 (7 years)
+  # Val: 2022 (1 year)
+  # Test: 2023-2024 (2 years)
 
 # Model settings
 model:
