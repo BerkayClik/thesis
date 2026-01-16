@@ -85,10 +85,26 @@ class QuaternionLinear(nn.Module):
 
         # Weight quaternion for each input-output pair
         # Shape: (out_features, in_features, 4)
-        # Xavier-like initialization for quaternions
-        stdv = 1.0 / math.sqrt(in_features)
-        self.weight = nn.Parameter(torch.empty(out_features, in_features, 4).uniform_(-stdv, stdv))
+        self.weight = nn.Parameter(torch.empty(out_features, in_features, 4))
         self.bias = nn.Parameter(torch.zeros(out_features, 4))
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        """
+        Initialize weights using Xavier-like initialization for quaternions.
+
+        Uses fan_in + fan_out scaling similar to Xavier initialization, but adjusted
+        for quaternion dimension (4 components). The factor of 4 accounts for the
+        Hamilton product summing over all 4 quaternion components.
+        """
+        # Xavier uniform: stdv = sqrt(6 / (fan_in + fan_out))
+        # For quaternions, we scale by the quaternion dimension
+        fan_in = self.in_features * 4  # Each quaternion has 4 components
+        fan_out = self.out_features * 4
+        stdv = math.sqrt(6.0 / (fan_in + fan_out))
+        nn.init.uniform_(self.weight, -stdv, stdv)
+        nn.init.zeros_(self.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """

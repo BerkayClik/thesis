@@ -35,6 +35,13 @@ training:
   learning_rate: 0.001
   patience: 10  # Early stopping patience
   seed: 42
+  # Gradient clipping for training stability
+  max_grad_norm: 1.0
+  # Learning rate scheduler (optional)
+  scheduler:
+    type: "reduce_on_plateau"
+    factor: 0.5
+    patience: 5
 
 # Evaluation settings
 evaluation:

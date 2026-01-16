@@ -12,9 +12,10 @@ import sys
 import json
 import argparse
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from torch.utils.data import DataLoader
 import numpy as np
+from scipy import stats
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -38,11 +39,21 @@ def load_config(config_path: str) -> Dict:
 
 
 def set_seed(seed: int):
-    """Set random seeds for reproducibility."""
+    """Set random seeds for reproducibility with deterministic behavior."""
     torch.manual_seed(seed)
     np.random.seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    # Enable deterministic algorithms for reproducibility
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    # For PyTorch 1.11+, enable deterministic algorithms globally
+    if hasattr(torch, 'use_deterministic_algorithms'):
+        try:
+            torch.use_deterministic_algorithms(True, warn_only=True)
+        except TypeError:
+            # Older PyTorch versions don't have warn_only parameter
+            pass
 
 
 def get_device(config: Dict) -> torch.device:
@@ -113,6 +124,73 @@ def denormalize(x: torch.Tensor, stats: Dict, col: int = 3) -> torch.Tensor:
         Denormalized tensor.
     """
     return x * stats['std'][col] + stats['mean'][col]
+
+
+def compute_statistical_significance(
+    results: Dict,
+    baseline_model: str = "real_lstm"
+) -> Dict[str, Dict[str, Dict]]:
+    """
+    Compute statistical significance tests between models.
+
+    Args:
+        results: Results dictionary from run_experiment.
+        baseline_model: Name of the baseline model for comparison.
+
+    Returns:
+        Dictionary with significance test results for each metric and model pair.
+    """
+    if baseline_model not in results:
+        return {}
+
+    significance_results = {}
+    metrics = ['mae', 'mse', 'directional_accuracy', 'sharpe_ratio']
+
+    # Get baseline values
+    baseline_runs = results[baseline_model]['individual_runs']
+    baseline_values = {
+        metric: [r['test_metrics'][metric] for r in baseline_runs]
+        for metric in metrics
+    }
+
+    for model_name, model_results in results.items():
+        if model_name == baseline_model:
+            continue
+
+        model_runs = model_results['individual_runs']
+        model_values = {
+            metric: [r['test_metrics'][metric] for r in model_runs]
+            for metric in metrics
+        }
+
+        significance_results[model_name] = {}
+        for metric in metrics:
+            baseline_vals = baseline_values[metric]
+            model_vals = model_values[metric]
+
+            # Paired t-test (if same number of seeds)
+            if len(baseline_vals) == len(model_vals) and len(baseline_vals) >= 2:
+                t_stat, p_value = stats.ttest_rel(model_vals, baseline_vals)
+                # Cohen's d effect size
+                diff = np.array(model_vals) - np.array(baseline_vals)
+                cohens_d = np.mean(diff) / np.std(diff, ddof=1) if np.std(diff) > 0 else 0
+            else:
+                # Independent t-test as fallback
+                t_stat, p_value = stats.ttest_ind(model_vals, baseline_vals)
+                pooled_std = np.sqrt(
+                    (np.var(model_vals, ddof=1) + np.var(baseline_vals, ddof=1)) / 2
+                )
+                cohens_d = (np.mean(model_vals) - np.mean(baseline_vals)) / pooled_std if pooled_std > 0 else 0
+
+            significance_results[model_name][metric] = {
+                't_statistic': float(t_stat),
+                'p_value': float(p_value),
+                'cohens_d': float(cohens_d),
+                'significant_0.05': p_value < 0.05,
+                'significant_0.01': p_value < 0.01
+            }
+
+    return significance_results
 
 
 def evaluate_model(
@@ -229,12 +307,20 @@ def run_single_experiment(
         variant_name,
         f'seed_{seed}'
     )
+
+    # Training stability settings from config
+    training_config = config.get('training', {})
+    max_grad_norm = training_config.get('max_grad_norm', 1.0)
+    scheduler_config = training_config.get('scheduler', None)
+
     trainer = Trainer(
         model=model,
         optimizer=optimizer,
         loss_fn=mse_loss,
         device=device,
         checkpoint_dir=checkpoint_dir,
+        max_grad_norm=max_grad_norm,
+        scheduler_config=scheduler_config,
         debug=debug
     )
 
@@ -388,11 +474,20 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
             print(f"    Dir Acc: {np.mean(test_das):.2f}% ± {np.std(test_das):.2f}%")
             print(f"    Sharpe: {np.mean(test_sharpes):.3f} ± {np.std(test_sharpes):.3f}")
 
-    return all_results
+    # Compute statistical significance against baseline
+    significance_results = compute_statistical_significance(all_results, baseline_model="real_lstm")
+
+    return {
+        'model_results': all_results,
+        'statistical_significance': significance_results
+    }
 
 
 def print_results_table(results: Dict):
-    """Print results in a formatted table."""
+    """Print results in a formatted table with statistical significance."""
+    model_results = results.get('model_results', results)
+    significance = results.get('statistical_significance', {})
+
     print("\n" + "=" * 100)
     print("EXPERIMENT RESULTS")
     print("=" * 100)
@@ -402,8 +497,8 @@ def print_results_table(results: Dict):
     print("-" * 100)
 
     # Rows
-    for model_name, model_results in results.items():
-        agg = model_results['aggregated']
+    for model_name, model_data in model_results.items():
+        agg = model_data['aggregated']
         mae_str = f"{agg['mae']['mean']:.4f} ± {agg['mae']['std']:.4f}"
         mse_str = f"{agg['mse']['mean']:.4f} ± {agg['mse']['std']:.4f}"
         da_str = f"{agg['directional_accuracy']['mean']:.2f} ± {agg['directional_accuracy']['std']:.2f}"
@@ -411,6 +506,22 @@ def print_results_table(results: Dict):
         print(f"{model_name:<28} {mae_str:<18} {mse_str:<18} {da_str:<16} {sharpe_str:<16}")
 
     print("=" * 100)
+
+    # Print statistical significance if available
+    if significance:
+        print("\nSTATISTICAL SIGNIFICANCE (vs real_lstm baseline)")
+        print("-" * 100)
+        print(f"{'Model':<28} {'Metric':<20} {'p-value':<12} {'Cohens d':<12} {'Significant':<12}")
+        print("-" * 100)
+
+        for model_name, metrics in significance.items():
+            for metric, stats in metrics.items():
+                sig_marker = "**" if stats['significant_0.01'] else ("*" if stats['significant_0.05'] else "")
+                print(f"{model_name:<28} {metric:<20} {stats['p_value']:<12.4f} {stats['cohens_d']:<12.3f} {sig_marker:<12}")
+
+        print("-" * 100)
+        print("* p < 0.05, ** p < 0.01")
+        print("=" * 100)
 
 
 def save_results(results: Dict, output_dir: str, experiment_name: str):

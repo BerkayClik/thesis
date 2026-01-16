@@ -7,8 +7,10 @@ Provides training loop with early stopping, validation, and checkpointing.
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from typing import Dict, Optional, Callable, List
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from typing import Dict, Optional, Callable, List, Any
 import os
+import warnings
 
 
 def compute_gradient_norms(model: nn.Module) -> Dict[str, float]:
@@ -67,6 +69,10 @@ class Trainer:
         loss_fn: Loss function.
         device: Device to train on.
         checkpoint_dir: Directory for saving checkpoints.
+        max_grad_norm: Maximum gradient norm for clipping. None disables clipping.
+        scheduler_config: Optional dict with scheduler settings.
+            Example: {'type': 'reduce_on_plateau', 'factor': 0.5, 'patience': 5}
+        debug: Enable debug mode with gradient tracking.
     """
 
     def __init__(
@@ -76,6 +82,8 @@ class Trainer:
         loss_fn: Callable,
         device: torch.device,
         checkpoint_dir: str = "checkpoints",
+        max_grad_norm: Optional[float] = 1.0,
+        scheduler_config: Optional[Dict[str, Any]] = None,
         debug: bool = False
     ):
         self.model = model
@@ -83,14 +91,34 @@ class Trainer:
         self.loss_fn = loss_fn
         self.device = device
         self.checkpoint_dir = checkpoint_dir
+        self.max_grad_norm = max_grad_norm
         self.debug = debug
 
         self.model.to(device)
+
+        # Initialize learning rate scheduler
+        self.scheduler = None
+        if scheduler_config:
+            self.scheduler = self._create_scheduler(scheduler_config)
 
         # Store initial weight stats if debug mode
         if self.debug:
             self.initial_weight_stats = compute_weight_stats(model)
             self._log_weight_stats("Initial weight statistics:", self.initial_weight_stats)
+
+    def _create_scheduler(self, config: Dict[str, Any]):
+        """Create learning rate scheduler from config."""
+        scheduler_type = config.get('type', 'reduce_on_plateau')
+        if scheduler_type == 'reduce_on_plateau':
+            return ReduceLROnPlateau(
+                self.optimizer,
+                mode='min',
+                factor=config.get('factor', 0.5),
+                patience=config.get('patience', 5)
+            )
+        else:
+            warnings.warn(f"Unknown scheduler type: {scheduler_type}, skipping scheduler")
+            return None
 
     def _log_weight_stats(self, title: str, stats: Dict):
         """Log weight statistics in a readable format."""
@@ -116,6 +144,7 @@ class Trainer:
         total_loss = 0.0
         num_batches = 0
         all_grad_norms = []
+        nan_detected = False
 
         for x, y in dataloader:
             x = x.to(self.device)
@@ -124,19 +153,33 @@ class Trainer:
             self.optimizer.zero_grad()
             pred = self.model(x)
             loss = self.loss_fn(pred.squeeze(-1), y)
+
+            # Check for NaN/Inf in loss
+            if torch.isnan(loss) or torch.isinf(loss):
+                nan_detected = True
+                warnings.warn(f"NaN/Inf detected in loss at batch {num_batches}. Skipping batch.")
+                continue
+
             loss.backward()
 
-            # Track gradients before optimizer step
+            # Track gradients before clipping
             if track_gradients or self.debug:
                 grad_norms = compute_gradient_norms(self.model)
                 all_grad_norms.append(grad_norms['total'])
+
+            # Gradient clipping
+            if self.max_grad_norm is not None:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
 
             self.optimizer.step()
 
             total_loss += loss.item()
             num_batches += 1
 
-        result = {'loss': total_loss / max(num_batches, 1)}
+        result = {
+            'loss': total_loss / max(num_batches, 1),
+            'nan_detected': nan_detected
+        }
 
         if track_gradients or self.debug:
             result['grad_norm_mean'] = sum(all_grad_norms) / len(all_grad_norms) if all_grad_norms else 0.0
@@ -196,7 +239,9 @@ class Trainer:
         history = {
             'train_loss': [],
             'val_loss': [],
-            'best_epoch': 0
+            'learning_rates': [],
+            'best_epoch': 0,
+            'nan_epochs': []
         }
 
         # Add debug tracking if enabled
@@ -214,6 +259,11 @@ class Trainer:
 
             history['train_loss'].append(train_loss)
             history['val_loss'].append(val_loss)
+            history['learning_rates'].append(self.optimizer.param_groups[0]['lr'])
+
+            # Track NaN detection
+            if train_result.get('nan_detected', False):
+                history['nan_epochs'].append(epoch)
 
             # Track debug info
             if self.debug:
@@ -223,12 +273,17 @@ class Trainer:
                     'min': train_result.get('grad_norm_min', 0.0)
                 })
 
+            # Step the scheduler based on validation loss
+            if self.scheduler is not None:
+                self.scheduler.step(val_loss)
+
             if verbose:
                 msg = (f"Epoch {epoch+1}/{num_epochs} - "
                        f"Train Loss: {train_loss:.6f} - "
                        f"Val Loss: {val_loss:.6f}")
                 if self.debug:
                     msg += f" - Grad Norm: {train_result.get('grad_norm_mean', 0.0):.4f}"
+                    msg += f" - LR: {self.optimizer.param_groups[0]['lr']:.6f}"
                 print(msg)
 
             # Early stopping check

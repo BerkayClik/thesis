@@ -4,11 +4,13 @@
 # Experiment identification
 experiment:
   name: "baseline_comparison"
-  description: "Compare real-valued and quaternion LSTM models"
+  description: "Compare real-valued and quaternion LSTM models with fair comparisons"
   seeds: [42, 123, 456]  # Multiple seeds for statistical significance
 
   # Model variants to test
+  # Includes both layer-matched and original configurations
   variants:
+    # === BASELINE MODELS ===
     - name: "real_lstm"
       model:
         type: "real_lstm"
@@ -23,18 +25,39 @@ experiment:
         num_layers: 2
         dropout: 0.1
 
+    # === LAYER-MATCHED QUATERNION MODELS (Fair Comparison A) ===
+    # Same num_layers=2 as real LSTM for fair architectural comparison
     - name: "quaternion_lstm"
       model:
         type: "quaternion_lstm"
         hidden_size: 64
-        num_layers: 1
+        num_layers: 2  # Matched to real LSTM
         dropout: 0.1
 
     - name: "quaternion_lstm_attention"
       model:
         type: "quaternion_lstm_attention"
         hidden_size: 64
-        num_layers: 1
+        num_layers: 2  # Matched to real LSTM
+        dropout: 0.1
+
+    # === PARAMETER-MATCHED MODELS (Fair Comparison B) ===
+    # Adjusted hidden sizes to approximately match parameter counts
+    # Real LSTM (64h, 2L) ~ 51k params
+    # Quaternion LSTM (64h, 2L) ~ 174k params
+    # To match ~51k params: quaternion needs hidden_size ~ 32
+    - name: "quaternion_lstm_param_matched"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 32  # Reduced to match real LSTM param count (~51k)
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "quaternion_lstm_attention_param_matched"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 32  # Reduced to match real LSTM param count
+        num_layers: 2
         dropout: 0.1
 
 # Ablation studies
