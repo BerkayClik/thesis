@@ -1,7 +1,7 @@
 """
 Evaluation metrics module.
 
-Provides MAE and MSE computation functions.
+Provides MAE, MSE, and MAPE computation functions.
 """
 
 import torch
@@ -33,3 +33,18 @@ def compute_mse(pred: torch.Tensor, target: torch.Tensor) -> float:
         MSE value.
     """
     return torch.mean((pred - target) ** 2).item()
+
+
+def compute_mape(pred: torch.Tensor, target: torch.Tensor, epsilon: float = 1e-8) -> float:
+    """
+    Compute Mean Absolute Percentage Error.
+
+    Args:
+        pred: Predictions tensor.
+        target: Target tensor.
+        epsilon: Small value to prevent division by zero.
+
+    Returns:
+        MAPE value as a percentage.
+    """
+    return (torch.abs((target - pred) / (torch.abs(target) + epsilon))).mean().item() * 100

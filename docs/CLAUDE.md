@@ -42,3 +42,8 @@ pip install torch pyyaml pandas numpy
 - Comment all inspired components
 - Keep code readable and modular
 - Prefer explicit over implicit logic
+- **Update `docs/ARCHITECTURE.md`** when making changes to:
+  - Data preprocessing pipeline (normalization, return computation, splitting)
+  - Model architectures (LSTM, attention, quaternion layers)
+  - Training loop (loss functions, optimizers, early stopping)
+  - Evaluation metrics or methodology

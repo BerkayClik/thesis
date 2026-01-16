@@ -19,6 +19,14 @@ A technical guide for CS students explaining the neural network architectures in
    - [6 Experimental Variants](#6-experimental-variants)
    - [Parameter Count Comparison](#parameter-count-comparison)
 10. [Data Flow Diagram](#data-flow-diagram-complete)
+11. [Training, Validation, and Testing](#training-validation-and-testing)
+    - [Data Splitting Strategy](#data-splitting-strategy)
+    - [Phase 1: Training](#phase-1-training)
+    - [Phase 2: Validation](#phase-2-validation)
+    - [Phase 3: Testing](#phase-3-testing)
+    - [Evaluation Metrics](#evaluation-metrics)
+    - [Complete Training Workflow](#complete-training-workflow)
+    - [Multi-Seed Experiments](#multi-seed-experiments)
 
 ---
 
@@ -545,18 +553,20 @@ The research question: **Does quaternion encoding help predict stock returns?**
 ## Data Flow Diagram (Complete)
 
 ```
-Raw OHLC Data (2000-2024)
+Raw OHLC Data (2015-2024)
          │
          ▼
-┌─────────────────────┐
-│   Preprocessing     │
-│  - Temporal split   │
-│  - Z-score norm     │
-│  - Sliding windows  │
-└──────────┬──────────┘
+┌─────────────────────────────┐
+│      Preprocessing          │
+│  1. Temporal split (raw)    │
+│  2. Compute returns (raw)   │  ◄── Returns from RAW prices
+│  3. Z-score normalize       │
+│  4. Sliding windows         │
+└──────────┬──────────────────┘
            │
            ▼
-    (batch, 20, 4)
+    X: (batch, 20, 4) normalized OHLC
+    y: returns from raw prices
            │
     ┌──────┴──────┐
     │             │
@@ -605,6 +615,329 @@ Last step    Attention
            ▼
    Predicted Return
 ```
+
+---
+
+## Training, Validation, and Testing
+
+This section explains the complete training pipeline from data splitting to final evaluation.
+
+### Data Splitting Strategy
+
+We use **temporal splitting** to prevent look-ahead bias - a critical requirement for financial time series:
+
+```
+Timeline: 2015 ─────────────────────────────────────────────► 2024
+
+          │◄────── TRAIN ──────►│◄─ VAL ─►│◄──── TEST ────►│
+          │      2015-2021      │  2022   │   2023-2024    │
+          │       7 years       │ 1 year  │    2 years     │
+```
+
+**Key Implementation Details:**
+
+| Split | Years | Purpose | Normalization |
+|-------|-------|---------|---------------|
+| Train | 2015-2021 | Model learning | Stats computed here |
+| Validation | 2022 | Early stopping & hyperparameter tuning | Uses train stats |
+| Test | 2023-2024 | Final unbiased evaluation | Uses train stats |
+
+**Critical:** Normalization statistics (mean, std) are computed from training data **only**. This prevents data leakage from validation/test sets.
+
+### Preprocessing Pipeline Order
+
+**Critical:** Returns must be computed from **raw prices** before normalization. Computing returns from normalized data causes training instability because:
+- Normalized prices have mean≈0, causing division by near-zero values
+- This creates inconsistent target scales depending on where in the price distribution each sample falls
+
+```python
+# Step 1: Temporal split (on RAW data)
+train_raw, val_raw, test_raw = temporal_split(raw_data, dates)
+
+# Step 2: Compute returns from RAW prices BEFORE normalization
+train_returns = (close[1:] - close[:-1]) / close[:-1]  # ~3-4% daily std for BTC
+val_returns = compute_returns(val_raw)
+test_returns = compute_returns(test_raw)
+
+# Step 3: Z-score normalize OHLC features (for model inputs)
+train_mean = train_raw.mean()
+train_std = train_raw.std()
+
+train_normalized = (train_raw - train_mean) / train_std
+val_normalized = (val_raw - train_mean) / train_std    # Uses TRAIN stats
+test_normalized = (test_raw - train_mean) / train_std  # Uses TRAIN stats
+
+# Step 4: Dataset uses normalized inputs + raw returns as targets
+dataset = SP500Dataset(train_normalized, returns=train_returns)
+```
+
+### Sliding Window Creation
+
+Data is converted to supervised learning format:
+
+```
+Input Window (X): 20 consecutive days of NORMALIZED OHLC
+Target (y): Percentage return computed from RAW prices
+
+Day:    1   2   3  ...  19  20  │ 21
+        └─ X (normalized) ─────┘  └── y = (RawClose₂₁ - RawClose₂₀) / RawClose₂₀
+```
+
+---
+
+### Phase 1: Training
+
+**File:** `src/training/trainer.py`
+
+The training loop processes batches with gradient updates:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    TRAINING EPOCH                           │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  FOR each batch in train_loader:                           │
+│      │                                                      │
+│      ▼                                                      │
+│  ┌─────────────┐                                           │
+│  │ Forward Pass │  pred = model(x)                         │
+│  └──────┬──────┘                                           │
+│         │                                                   │
+│         ▼                                                   │
+│  ┌─────────────┐                                           │
+│  │ Compute Loss │  loss = MSE(pred, target)                │
+│  └──────┬──────┘                                           │
+│         │                                                   │
+│         ▼                                                   │
+│  ┌──────────────┐                                          │
+│  │ Backward Pass │  loss.backward()                        │
+│  └──────┬───────┘                                          │
+│         │                                                   │
+│         ▼                                                   │
+│  ┌────────────────┐                                        │
+│  │ Gradient Clip  │  clip_grad_norm_(params, max_norm=1.0) │
+│  └──────┬─────────┘                                        │
+│         │                                                   │
+│         ▼                                                   │
+│  ┌────────────────┐                                        │
+│  │ Optimizer Step │  optimizer.step()                      │
+│  └────────────────┘                                        │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Training Components:**
+
+| Component | Configuration | Purpose |
+|-----------|--------------|---------|
+| Loss Function | MSE | Penalizes prediction errors |
+| Optimizer | Adam (lr=0.001) | Adaptive learning rate |
+| Gradient Clipping | max_norm=1.0 | Prevents gradient explosion |
+| Batch Size | 32 | Memory vs. convergence balance |
+| LR Scheduler | ReduceLROnPlateau | Reduce LR by 0.5× on plateau |
+
+---
+
+### Phase 2: Validation
+
+After each training epoch, the model is evaluated on the validation set **without gradient updates**:
+
+```python
+def validate(self, dataloader: DataLoader) -> float:
+    self.model.eval()  # Disable dropout, batchnorm training mode
+
+    with torch.no_grad():  # No gradient computation
+        for x, y in dataloader:
+            pred = self.model(x)
+            loss = mse_loss(pred, y)
+
+    return average_validation_loss
+```
+
+**Early Stopping Mechanism:**
+
+```
+Epoch 1:  val_loss = 0.0045  → Best! Save checkpoint. patience = 0
+Epoch 2:  val_loss = 0.0042  → Best! Save checkpoint. patience = 0
+Epoch 3:  val_loss = 0.0041  → Best! Save checkpoint. patience = 0
+Epoch 4:  val_loss = 0.0043  → No improvement.       patience = 1
+Epoch 5:  val_loss = 0.0044  → No improvement.       patience = 2
+...
+Epoch 13: val_loss = 0.0046  → No improvement.       patience = 10 → STOP!
+
+Best model from Epoch 3 is loaded for testing.
+```
+
+**Configuration:**
+- `patience = 10`: Stop if no improvement for 10 epochs
+- `max_epochs = 100`: Maximum training iterations
+- Best checkpoint saved to `checkpoints/best_model.pt`
+
+---
+
+### Phase 3: Testing
+
+After training completes, the **best checkpoint** is loaded and evaluated on the held-out test set:
+
+```
+┌────────────────────────────────────────────────────────────┐
+│                    TEST EVALUATION                          │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
+│  1. Load best checkpoint (lowest validation loss)          │
+│                                                            │
+│  2. Set model to eval mode                                 │
+│                                                            │
+│  3. Forward pass on test set (no gradients)                │
+│     └── predictions = model(test_data)                     │
+│                                                            │
+│  4. Compute evaluation metrics:                            │
+│     ├── MAE (Mean Absolute Error)                          │
+│     ├── MSE (Mean Squared Error)                           │
+│     ├── Directional Accuracy                               │
+│     └── Sharpe Ratio                                       │
+│                                                            │
+└────────────────────────────────────────────────────────────┘
+```
+
+### Evaluation Metrics
+
+| Metric | Formula | Interpretation |
+|--------|---------|----------------|
+| MAE | `mean(\|pred - target\|)` | Average prediction error magnitude |
+| MSE | `mean((pred - target)²)` | Penalizes large errors more heavily |
+| Directional Accuracy | `% where sign(pred) == sign(target)` | Did we predict up/down correctly? |
+| Sharpe Ratio | `mean(strategy_returns) / std(strategy_returns)` | Risk-adjusted trading performance |
+
+**Directional Accuracy:**
+```python
+# If model predicts +0.5% and actual is +0.3% → Correct (both positive)
+# If model predicts +0.5% and actual is -0.3% → Wrong (opposite signs)
+accuracy = (sign(pred) == sign(target)).mean() * 100
+```
+
+**Sharpe Ratio (Trading Strategy):**
+```python
+# Strategy: Long when pred > 0, Short when pred < 0
+strategy_returns = sign(pred_return) * actual_return
+sharpe = mean(strategy_returns) / std(strategy_returns)
+```
+
+---
+
+### Complete Training Workflow
+
+```
+                         START
+                           │
+                           ▼
+            ┌──────────────────────────────┐
+            │     Load & Preprocess Data    │
+            │  ─────────────────────────── │
+            │  • Download OHLC data        │
+            │  • Temporal split            │
+            │  • Z-score normalize         │
+            │  • Create sliding windows    │
+            └──────────────┬───────────────┘
+                           │
+                           ▼
+            ┌──────────────────────────────┐
+            │    Create DataLoaders        │
+            │  ─────────────────────────── │
+            │  • train_loader (shuffle=T)  │
+            │  • val_loader (shuffle=F)    │
+            │  • test_loader (shuffle=F)   │
+            └──────────────┬───────────────┘
+                           │
+                           ▼
+            ┌──────────────────────────────┐
+            │     Initialize Training      │
+            │  ─────────────────────────── │
+            │  • Create model              │
+            │  • Setup optimizer           │
+            │  • Setup LR scheduler        │
+            │  • Initialize best_loss = ∞  │
+            └──────────────┬───────────────┘
+                           │
+                           ▼
+         ┌────────────────────────────────────┐
+         │           TRAINING LOOP            │
+         │  ────────────────────────────────  │
+         │                                    │
+         │  ┌──────────────────────────────┐ │
+    ┌───►│  │      Train Epoch             │ │
+    │    │  │  • Forward/backward pass     │ │
+    │    │  │  • Gradient clipping         │ │
+    │    │  │  • Optimizer step            │ │
+    │    │  └──────────────┬───────────────┘ │
+    │    │                 │                  │
+    │    │                 ▼                  │
+    │    │  ┌──────────────────────────────┐ │
+    │    │  │      Validate                │ │
+    │    │  │  • Forward pass (no grad)    │ │
+    │    │  │  • Compute val_loss          │ │
+    │    │  └──────────────┬───────────────┘ │
+    │    │                 │                  │
+    │    │                 ▼                  │
+    │    │  ┌──────────────────────────────┐ │
+    │    │  │   Update Best / Patience     │ │
+    │    │  │  • If improved: save ckpt    │ │
+    │    │  │  • Else: patience++          │ │
+    │    │  └──────────────┬───────────────┘ │
+    │    │                 │                  │
+    │    └─────────────────┼──────────────────┘
+    │                      │
+    │              ┌───────┴───────┐
+    │              │ patience < 10 │
+    │              │ & epoch < 100 │
+    │              └───────┬───────┘
+    │                 Yes  │  No
+    └──────────────────────┘   │
+                               ▼
+            ┌──────────────────────────────┐
+            │      Load Best Checkpoint    │
+            └──────────────┬───────────────┘
+                           │
+                           ▼
+            ┌──────────────────────────────┐
+            │       Test Evaluation        │
+            │  ─────────────────────────── │
+            │  • Forward pass on test set  │
+            │  • Compute MAE, MSE          │
+            │  • Compute Dir. Accuracy     │
+            │  • Compute Sharpe Ratio      │
+            └──────────────┬───────────────┘
+                           │
+                           ▼
+            ┌──────────────────────────────┐
+            │       Save Results           │
+            │  ─────────────────────────── │
+            │  • Metrics JSON              │
+            │  • Training history          │
+            │  • Model checkpoint          │
+            └──────────────────────────────┘
+                           │
+                           ▼
+                          END
+```
+
+### Multi-Seed Experiments
+
+For statistical validity, each model variant is trained with multiple random seeds:
+
+```
+Variant: quaternion_lstm_attention
+├── Seed 42  → test_mae=0.0234, dir_acc=54.2%
+├── Seed 123 → test_mae=0.0241, dir_acc=53.8%
+└── Seed 456 → test_mae=0.0228, dir_acc=55.1%
+    ────────────────────────────────────
+    Mean ± Std: MAE=0.0234±0.0005, Dir=54.4±0.5%
+```
+
+Statistical significance is computed using:
+- **Paired t-test:** Compare model vs baseline
+- **Cohen's d:** Effect size magnitude
+- **p-values:** Significance at 0.05 and 0.01 levels
 
 ---
 

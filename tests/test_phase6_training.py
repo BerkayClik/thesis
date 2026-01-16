@@ -18,7 +18,7 @@ import os
 
 from src.training.trainer import Trainer
 from src.training.losses import mse_loss
-from src.evaluation.metrics import compute_mae, compute_mse
+from src.evaluation.metrics import compute_mae, compute_mse, compute_mape
 from src.evaluation.directional_accuracy import compute_directional_accuracy
 from src.data.dataset import SP500Dataset
 from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel
@@ -100,6 +100,44 @@ class TestMSE:
         assert mse == pytest.approx(5.0)
 
 
+class TestMAPE:
+    """Tests for MAPE computation."""
+
+    def test_zero_for_identical(self):
+        """Zero MAPE when predictions equal targets."""
+        pred = torch.tensor([1.0, 2.0, 3.0])
+        target = torch.tensor([1.0, 2.0, 3.0])
+        mape = compute_mape(pred, target)
+        assert mape == pytest.approx(0.0)
+
+    def test_known_value(self):
+        """Test known MAPE value."""
+        pred = torch.tensor([90.0, 80.0])
+        target = torch.tensor([100.0, 100.0])
+        # MAPE = ((|100-90|/100 + |100-80|/100) / 2) * 100 = ((0.1 + 0.2) / 2) * 100 = 15%
+        mape = compute_mape(pred, target)
+        assert mape == pytest.approx(15.0)
+
+    def test_zero_target_handling(self):
+        """Test epsilon prevents division by zero."""
+        pred = torch.tensor([0.1, 1.0])
+        target = torch.tensor([0.0, 1.0])
+        # Should not raise an error due to epsilon
+        mape = compute_mape(pred, target)
+        assert mape >= 0  # MAPE should be non-negative
+        assert not torch.isnan(torch.tensor(mape))  # Should not be NaN
+
+    def test_symmetric_percentage(self):
+        """MAPE is not symmetric - test this property."""
+        pred = torch.tensor([100.0])
+        target = torch.tensor([50.0])
+        mape1 = compute_mape(pred, target)
+        mape2 = compute_mape(target, pred)
+        # MAPE is not symmetric: |50-100|/50 = 100% vs |100-50|/100 = 50%
+        assert mape1 == pytest.approx(100.0)
+        assert mape2 == pytest.approx(50.0)
+
+
 class TestDirectionalAccuracy:
     """Tests for directional accuracy."""
 
@@ -160,14 +198,28 @@ class TestSP500Dataset:
         assert y.shape == ()  # scalar
 
     def test_target_is_next_close(self):
-        """Target is next-step close price."""
+        """Target is next-step close price when predict_returns=False."""
         data = torch.arange(100 * 4).float().view(100, 4)
-        dataset = SP500Dataset(data, window_size=20, target_col=3)
+        dataset = SP500Dataset(data, window_size=20, target_col=3, predict_returns=False)
 
         x, y = dataset[0]
         # Target should be close price at position 20
         expected = data[20, 3]
         assert y == expected
+
+    def test_target_is_return(self):
+        """Target is percentage return when predict_returns=True (default)."""
+        data = torch.tensor([[1.0, 1.0, 1.0, 100.0],
+                             [1.0, 1.0, 1.0, 110.0],
+                             [1.0, 1.0, 1.0, 105.0]])
+        # Pre-compute returns from raw prices: [10%, -4.545%]
+        returns = torch.tensor([0.10, -0.04545454])
+        dataset = SP500Dataset(data, window_size=2, target_col=3, predict_returns=True, returns=returns)
+
+        x, y = dataset[0]
+        # Target should be the return from position 1 to position 2
+        # returns[0 + 2 - 1] = returns[1] = -4.545%
+        assert y == pytest.approx(-0.04545454, rel=1e-4)
 
     def test_no_overlap_with_target(self):
         """Window doesn't overlap with target."""
@@ -381,7 +433,7 @@ class TestNoLookAheadBias:
         # This is verified by the SP500Dataset implementation
         # which only returns past data as X and future as y
         data = torch.arange(100 * 4).float().view(100, 4)
-        dataset = SP500Dataset(data, window_size=20)
+        dataset = SP500Dataset(data, window_size=20, predict_returns=False)
 
         x, y = dataset[50]
 
@@ -389,6 +441,29 @@ class TestNoLookAheadBias:
         # x covers indices 50 to 69, y is from index 70
         max_x_value = x.max()
         assert max_x_value < y
+
+    def test_no_lookahead_with_returns(self):
+        """No look-ahead bias when predicting returns."""
+        # Create data with known close prices in column 3
+        data = torch.zeros(100, 4)
+        data[:, 3] = torch.arange(100).float()  # Close prices: 0, 1, 2, ...
+
+        # Pre-compute returns: return[t] = (price[t+1] - price[t]) / price[t]
+        # For sequential integers starting at 0, this would have division issues
+        # So use prices starting at 1
+        data[:, 3] = torch.arange(1, 101).float()  # Close prices: 1, 2, 3, ...
+        returns = (data[1:, 3] - data[:-1, 3]) / data[:-1, 3]  # Returns from raw prices
+
+        dataset = SP500Dataset(data, window_size=20, predict_returns=True, returns=returns)
+
+        x, y = dataset[50]
+
+        # x covers indices 50 to 69 (window of 20)
+        # y is the return from index 69 to 70
+        # The target return is computed from future price (index 70) relative to last window price (index 69)
+        # This is valid because we only need the *direction* of price change, not future features
+        expected_return = (data[70, 3] - data[69, 3]) / data[69, 3]
+        assert y == pytest.approx(expected_return.item(), rel=1e-5)
 
     def test_validation_separate_from_training(self):
         """Validation doesn't leak into training."""
