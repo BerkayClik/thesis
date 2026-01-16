@@ -289,6 +289,16 @@ def run_single_experiment(
         dropout=model_config.get('dropout', 0.0)
     )
 
+    # Compile model for faster execution (PyTorch 2.0+)
+    if hasattr(torch, 'compile'):
+        try:
+            model = torch.compile(model)
+            if verbose:
+                print(f"    Model compiled with torch.compile")
+        except Exception as e:
+            if verbose:
+                print(f"    torch.compile failed, using eager mode: {e}")
+
     # Count parameters for debugging
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     if verbose:

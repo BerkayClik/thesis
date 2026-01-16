@@ -15,6 +15,10 @@ A technical guide for CS students explaining the neural network architectures in
 7. [Model 3: Quaternion LSTM](#model-3-quaternion-lstm)
 8. [Model 4: Quaternion LSTM + Attention](#model-4-quaternion-lstm--attention)
 9. [Comparison Summary](#comparison-summary)
+   - [4 Model Architectures](#4-model-architectures)
+   - [6 Experimental Variants](#6-experimental-variants)
+   - [Parameter Count Comparison](#parameter-count-comparison)
+10. [Data Flow Diagram](#data-flow-diagram-complete)
 
 ---
 
@@ -481,6 +485,8 @@ class QNNAttentionModel(nn.Module):
 
 ## Comparison Summary
 
+### 4 Model Architectures
+
 | Model | OHLC Encoding | Sequence Processing | Time Aggregation |
 |-------|---------------|---------------------|------------------|
 | Real LSTM | Independent features | Standard LSTM | Last timestep |
@@ -488,16 +494,40 @@ class QNNAttentionModel(nn.Module):
 | Quaternion LSTM | Single quaternion | Hamilton product LSTM | Last timestep |
 | **Quaternion LSTM + Attention** | Single quaternion | Hamilton product LSTM | Learned weights |
 
+### 6 Experimental Variants
+
+We run **6 variants** in experiments, not just 4. Why? Quaternion models have ~3-4x more parameters at the same hidden size. To ensure fair comparison, we test quaternion models in two configurations:
+
+| # | Variant Name | Architecture | Hidden | Purpose |
+|---|--------------|--------------|--------|---------|
+| 1 | `real_lstm` | Real LSTM | 64 | Baseline |
+| 2 | `real_lstm_attention` | Real LSTM + Attention | 64 | Baseline |
+| 3 | `quaternion_lstm` | Quaternion LSTM | 64 | Layer-matched |
+| 4 | `quaternion_lstm_attention` | Quaternion LSTM + Attention | 64 | Layer-matched |
+| 5 | `quaternion_lstm_param_matched` | Quaternion LSTM | 32 | Parameter-matched |
+| 6 | `quaternion_lstm_attention_param_matched` | Quaternion LSTM + Attention | 32 | Parameter-matched |
+
+**Layer-matched (hidden=64):** Same architecture depth as real LSTM, but quaternion has more parameters. Tests if quaternion math itself helps.
+
+**Parameter-matched (hidden=32):** Reduced hidden size so parameter count matches real LSTM (~51K). Tests if improvements come from quaternion math or just having more parameters.
+
 ### Parameter Count Comparison
 
-For `hidden_size=64`:
+**Layer-matched (hidden_size=64):**
 
 | Model | Approximate Parameters |
 |-------|----------------------|
-| Real LSTM | ~50K |
-| Real LSTM + Attention | ~50K |
-| Quaternion LSTM | ~130K |
-| Quaternion LSTM + Attention | ~135K |
+| Real LSTM | ~51K |
+| Real LSTM + Attention | ~51K |
+| Quaternion LSTM | ~174K |
+| Quaternion LSTM + Attention | ~179K |
+
+**Parameter-matched (hidden_size=32):**
+
+| Model | Approximate Parameters |
+|-------|----------------------|
+| Quaternion LSTM (param-matched) | ~51K |
+| Quaternion LSTM + Attention (param-matched) | ~53K |
 
 Quaternion models have more parameters because each weight is 4D instead of 1D.
 
@@ -507,7 +537,8 @@ The research question: **Does quaternion encoding help predict stock returns?**
 
 - Compare Real LSTM vs Quaternion LSTM → Effect of quaternion encoding
 - Compare without attention vs with attention → Effect of temporal attention
-- Compare all 4 → Find the best combination
+- Compare layer-matched vs parameter-matched → Is it the math or just more parameters?
+- Compare all 6 → Find the best combination
 
 ---
 
