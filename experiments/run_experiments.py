@@ -47,6 +47,11 @@ def set_seed(seed: int):
     # Enable deterministic algorithms for reproducibility
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    # TF32 settings (new API for PyTorch 2.0+) - use IEEE precision for reproducibility
+    if hasattr(torch.backends.cuda, 'matmul'):
+        torch.backends.cuda.matmul.allow_tf32 = False
+    if hasattr(torch.backends.cudnn, 'allow_tf32'):
+        torch.backends.cudnn.allow_tf32 = False
     # For PyTorch 1.11+, enable deterministic algorithms globally
     if hasattr(torch, 'use_deterministic_algorithms'):
         try:
