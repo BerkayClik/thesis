@@ -97,14 +97,20 @@ class QuaternionLinear(nn.Module):
         Uses fan_in + fan_out scaling similar to Xavier initialization, but adjusted
         for quaternion dimension (4 components). The factor of 4 accounts for the
         Hamilton product summing over all 4 quaternion components.
+
+        Bias is initialized using the same uniform distribution as weights (matching
+        PyTorch's nn.Linear behavior) rather than zeros, which helps with symmetry
+        breaking and gradient flow.
         """
         # Xavier uniform: stdv = sqrt(6 / (fan_in + fan_out))
         # For quaternions, we scale by the quaternion dimension
+        # Use symmetric fan calculation for consistent initialization across layers
         fan_in = self.in_features * 4  # Each quaternion has 4 components
         fan_out = self.out_features * 4
         stdv = math.sqrt(6.0 / (fan_in + fan_out))
         nn.init.uniform_(self.weight, -stdv, stdv)
-        nn.init.zeros_(self.bias)
+        # Initialize bias with same distribution as weights (matches nn.Linear)
+        nn.init.uniform_(self.bias, -stdv, stdv)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """

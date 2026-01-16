@@ -38,27 +38,45 @@ def load_config(config_path: str) -> Dict:
         return yaml.safe_load(f)
 
 
-def set_seed(seed: int):
-    """Set random seeds for reproducibility with deterministic behavior."""
+def set_seed(seed: int, fast_mode: bool = False):
+    """
+    Set random seeds for reproducibility with deterministic behavior.
+
+    Args:
+        seed: Random seed for reproducibility.
+        fast_mode: If True, enables TF32 for faster training (less reproducible).
+                   If False (default), uses IEEE precision for strict reproducibility.
+    """
     torch.manual_seed(seed)
     np.random.seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-    # Enable deterministic algorithms for reproducibility
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-    # TF32 settings (new API for PyTorch 2.0+) - use IEEE precision for reproducibility
-    if hasattr(torch.backends.cuda, 'matmul'):
-        torch.backends.cuda.matmul.allow_tf32 = False
-    if hasattr(torch.backends.cudnn, 'allow_tf32'):
-        torch.backends.cudnn.allow_tf32 = False
-    # For PyTorch 1.11+, enable deterministic algorithms globally
-    if hasattr(torch, 'use_deterministic_algorithms'):
-        try:
-            torch.use_deterministic_algorithms(True, warn_only=True)
-        except TypeError:
-            # Older PyTorch versions don't have warn_only parameter
-            pass
+
+    if fast_mode:
+        # Fast mode: enable TF32 for 2-3x speedup on Ampere+ GPUs
+        # Less reproducible but suitable for quick iteration
+        torch.backends.cudnn.deterministic = False
+        torch.backends.cudnn.benchmark = True
+        if hasattr(torch.backends.cuda, 'matmul'):
+            torch.backends.cuda.matmul.allow_tf32 = True
+        if hasattr(torch.backends.cudnn, 'allow_tf32'):
+            torch.backends.cudnn.allow_tf32 = True
+    else:
+        # Strict reproducibility mode (default)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        # TF32 settings (new API for PyTorch 2.0+) - use IEEE precision for reproducibility
+        if hasattr(torch.backends.cuda, 'matmul'):
+            torch.backends.cuda.matmul.allow_tf32 = False
+        if hasattr(torch.backends.cudnn, 'allow_tf32'):
+            torch.backends.cudnn.allow_tf32 = False
+        # For PyTorch 1.11+, enable deterministic algorithms globally
+        if hasattr(torch, 'use_deterministic_algorithms'):
+            try:
+                torch.use_deterministic_algorithms(True, warn_only=True)
+            except TypeError:
+                # Older PyTorch versions don't have warn_only parameter
+                pass
 
 
 def get_device(config: Dict) -> torch.device:
@@ -277,14 +295,15 @@ def run_single_experiment(
     verbose: bool = True,
     debug: bool = False,
     variant_name: str = "default",
-    predict_returns: bool = True
+    predict_returns: bool = True,
+    fast_mode: bool = False
 ) -> Dict:
     """
     Run a single experiment with one model configuration and seed.
 
     Returns results dictionary with training history and test metrics.
     """
-    set_seed(seed)
+    set_seed(seed, fast_mode=fast_mode)
 
     # Create model
     model = create_model(
@@ -449,6 +468,7 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
             print(f"\nRunning variant: {variant_name}")
 
         variant_results = []
+        fast_mode = config.get('training', {}).get('fast_mode', False)
         for seed in seeds:
             result = run_single_experiment(
                 config=config,
@@ -462,7 +482,8 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
                 verbose=verbose,
                 debug=debug,
                 variant_name=variant_name,
-                predict_returns=predict_returns
+                predict_returns=predict_returns,
+                fast_mode=fast_mode
             )
             variant_results.append(result)
 
@@ -551,6 +572,8 @@ def save_results(results: Dict, output_dir: str, experiment_name: str):
     def convert_to_serializable(obj):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
+        elif isinstance(obj, (np.bool_, bool)):
+            return bool(obj)
         elif isinstance(obj, (np.float32, np.float64)):
             return float(obj)
         elif isinstance(obj, (np.int32, np.int64)):
@@ -585,6 +608,13 @@ def main():
     # Load configs
     base_config = load_config(args.base_config)
     experiment_config = load_config(args.experiment_config)
+
+    # Merge experiment config overrides into base config
+    # This allows quick_experiment.yaml to override training settings
+    if 'training' in experiment_config:
+        for key, value in experiment_config['training'].items():
+            base_config['training'][key] = value
+            print(f"Override: training.{key} = {value}")
 
     print("=" * 80)
     print("Quaternion Neural Networks - Experiment Runner")

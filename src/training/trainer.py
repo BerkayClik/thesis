@@ -73,6 +73,7 @@ class Trainer:
         scheduler_config: Optional dict with scheduler settings.
             Example: {'type': 'reduce_on_plateau', 'factor': 0.5, 'patience': 5}
         debug: Enable debug mode with gradient tracking.
+        grad_explosion_threshold: Gradient norm threshold for explosion warning.
     """
 
     def __init__(
@@ -84,7 +85,8 @@ class Trainer:
         checkpoint_dir: str = "checkpoints",
         max_grad_norm: Optional[float] = 1.0,
         scheduler_config: Optional[Dict[str, Any]] = None,
-        debug: bool = False
+        debug: bool = False,
+        grad_explosion_threshold: float = 100.0
     ):
         self.model = model
         self.optimizer = optimizer
@@ -93,6 +95,8 @@ class Trainer:
         self.checkpoint_dir = checkpoint_dir
         self.max_grad_norm = max_grad_norm
         self.debug = debug
+        self.grad_explosion_threshold = grad_explosion_threshold
+        self.grad_explosion_count = 0
 
         self.model.to(device)
 
@@ -165,7 +169,18 @@ class Trainer:
             # Track gradients before clipping
             if track_gradients or self.debug:
                 grad_norms = compute_gradient_norms(self.model)
-                all_grad_norms.append(grad_norms['total'])
+                total_grad_norm = grad_norms['total']
+                all_grad_norms.append(total_grad_norm)
+
+                # Early warning for gradient explosion
+                if total_grad_norm > self.grad_explosion_threshold:
+                    self.grad_explosion_count += 1
+                    if self.grad_explosion_count <= 5:  # Limit warning spam
+                        warnings.warn(
+                            f"Gradient explosion detected! Norm={total_grad_norm:.2f} "
+                            f"(threshold={self.grad_explosion_threshold}). "
+                            f"Count: {self.grad_explosion_count}"
+                        )
 
             # Gradient clipping
             if self.max_grad_norm is not None:
@@ -241,8 +256,12 @@ class Trainer:
             'val_loss': [],
             'learning_rates': [],
             'best_epoch': 0,
-            'nan_epochs': []
+            'nan_epochs': [],
+            'grad_explosion_count': 0
         }
+
+        # Reset gradient explosion counter at start of training
+        self.grad_explosion_count = 0
 
         # Add debug tracking if enabled
         if self.debug:
@@ -299,6 +318,9 @@ class Trainer:
                 if verbose:
                     print(f"Early stopping at epoch {epoch+1}")
                 break
+
+        # Record final gradient explosion count
+        history['grad_explosion_count'] = self.grad_explosion_count
 
         return history
 

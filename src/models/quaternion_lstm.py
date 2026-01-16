@@ -18,6 +18,10 @@ class QuaternionLSTMCell(nn.Module):
     The cell maintains hidden state h and cell state c in quaternion space (4D).
     Gate computations use Hamilton product instead of matrix multiplication.
 
+    Features for training stability:
+    - Forget gate bias initialized to +1.0 (per Jozefowicz et al. 2015)
+    - LayerNorm applied to cell and hidden states to prevent gradient explosion
+
     Args:
         input_size: Number of input quaternion features.
         hidden_size: Number of hidden quaternion features.
@@ -47,6 +51,29 @@ class QuaternionLSTMCell(nn.Module):
         # Output gate
         self.W_io = QuaternionLinear(input_size, hidden_size)
         self.W_ho = QuaternionLinear(hidden_size, hidden_size)
+
+        # LayerNorm for stabilizing cell and hidden states
+        # Applied over the quaternion dimension (4 components)
+        self.cell_norm = nn.LayerNorm(4)
+        self.hidden_norm = nn.LayerNorm(4)
+
+        # Initialize forget gate bias to +1.0 for better gradient flow
+        # (per Jozefowicz et al. 2015 "An Empirical Exploration of RNN Architectures")
+        self._init_forget_gate_bias()
+
+    def _init_forget_gate_bias(self):
+        """
+        Initialize forget gate bias to +1.0 for better gradient flow.
+
+        Per Jozefowicz et al. 2015, initializing forget gate bias to 1.0
+        helps with learning long-term dependencies by keeping the forget
+        gate initially open.
+        """
+        with torch.no_grad():
+            # Add +1.0 to the real component of forget gate biases
+            # This biases the sigmoid toward 1 (keeping the cell state)
+            self.W_if.bias.data[..., 0] += 1.0
+            self.W_hf.bias.data[..., 0] += 1.0
 
     def _quaternion_sigmoid(self, q: torch.Tensor) -> torch.Tensor:
         """
@@ -119,9 +146,13 @@ class QuaternionLSTMCell(nn.Module):
         # New cell state: c_new = f * c + i * g
         # Using Hamilton product for quaternion multiplication
         c_new = hamilton_product(f, c) + hamilton_product(i, g)
+        # Apply LayerNorm to stabilize cell state magnitudes
+        c_new = self.cell_norm(c_new)
 
         # New hidden state: h_new = o * tanh(c_new)
         h_new = hamilton_product(o, self._quaternion_tanh(c_new))
+        # Apply LayerNorm to stabilize hidden state magnitudes
+        h_new = self.hidden_norm(h_new)
 
         return h_new, c_new
 

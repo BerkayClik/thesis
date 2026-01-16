@@ -1,9 +1,9 @@
 # Quick iteration experiment configuration
-# All 6 models, 1 seed for faster iteration (~10-15 min on Colab CUDA)
+# Reduced epochs/patience, single seed for faster iteration
 
 experiment:
   name: "quick_iteration"
-  description: "Quick iteration mode - all models with single seed"
+  description: "Quick iteration mode - reduced training, single seed for validation"
   seeds: [42]  # 1 seed instead of 3 (3x faster)
 
   variants:
@@ -22,7 +22,22 @@ experiment:
         num_layers: 2
         dropout: 0.1
 
-    # === LAYER-MATCHED QUATERNION MODELS ===
+    # === PARAMETER-MATCHED MODELS (PRIMARY) ===
+    - name: "quaternion_lstm_param_matched"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "quaternion_lstm_attention_param_matched"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+
+    # === LAYER-MATCHED QUATERNION MODELS (SECONDARY) ===
     - name: "quaternion_lstm"
       model:
         type: "quaternion_lstm"
@@ -37,20 +52,12 @@ experiment:
         num_layers: 2
         dropout: 0.1
 
-    # === PARAMETER-MATCHED MODELS ===
-    - name: "quaternion_lstm_param_matched"
-      model:
-        type: "quaternion_lstm"
-        hidden_size: 32
-        num_layers: 2
-        dropout: 0.1
-
-    - name: "quaternion_lstm_attention_param_matched"
-      model:
-        type: "quaternion_lstm_attention"
-        hidden_size: 32
-        num_layers: 2
-        dropout: 0.1
+# Override base.yaml training settings for faster iteration
+training:
+  num_epochs: 50      # Reduced from 100
+  patience: 5         # Reduced from 10
+  batch_size: 64      # Increased from 32 for faster epochs
+  fast_mode: true     # Enable TF32 for 2-3x speedup on Ampere+ GPUs
 
 output:
   results_dir: "experiments/results"
