@@ -103,8 +103,8 @@ experiments/results/
 experiments/outputs/
 *.log
 
-# Data files
-data/
+# Data files (root data folder only, not src/data/)
+/data/
 *.csv
 *.parquet
 *.pkl
