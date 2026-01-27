@@ -542,6 +542,49 @@ We run **7 variants** in experiments. This includes a naive baseline plus 6 mode
 
 Quaternion models have more parameters because each weight is 4D instead of 1D.
 
+---
+
+### ⚠️ IMPORTANT: Architectural Differences Note (Discuss with Advisor)
+
+> **NOTE FOR THESIS REVIEW:** The following architectural differences exist between Real and Quaternion models. These should be discussed with your advisor before final submission.
+
+#### Output Head Differences
+
+| Model Type | Output Head Architecture | Extra Layers |
+|------------|-------------------------|--------------|
+| **Real LSTM** | `Linear(hidden → 1)` | None |
+| **Real LSTM + Attention** | `Linear(hidden → 1)` | None |
+| **Quaternion LSTM** | `Linear(hidden → hidden//2) → ReLU → Linear(hidden//2 → 1)` | 2-layer MLP |
+| **Quaternion LSTM + Attention** | `Linear(hidden → hidden//2) → ReLU → Linear(hidden//2 → 1)` | 2-layer MLP |
+
+#### Projection Layer (Quaternion Only)
+
+Quaternion models include an additional projection layer that Real models don't have:
+
+```
+Quaternion: QLSTM → Flatten(hidden*4) → Projection(hidden*4 → hidden) → Output Head
+Real:       LSTM  → Last timestep(hidden) → Output Head
+```
+
+#### Implications for Fair Comparison
+
+1. **Quaternion models have more expressive output capacity** due to 2-layer MLP vs single Linear layer
+2. **Projection layer adds extra transformation** before output head
+3. **If Quaternion outperforms Real**, it could be due to:
+   - Hamilton product capturing OHLC correlations (thesis hypothesis)
+   - Extra non-linearity from 2-layer MLP head
+   - Additional capacity from projection layer
+
+#### Potential Resolutions (Discuss with Advisor)
+
+| Option | Change | Effect |
+|--------|--------|--------|
+| A | Add 2-layer MLP to Real models | Isolates Hamilton product effect |
+| B | Use single Linear in Quaternion models | Simpler, but may hurt Quaternion performance |
+| C | Document as limitation | Acknowledge in thesis limitations section |
+
+**Recommendation:** If the goal is to prove Hamilton product's benefit, Option A provides the strongest evidence ("same architecture, only encoding differs").
+
 ### What We're Testing
 
 The research question: **Does quaternion encoding help predict stock returns?**
