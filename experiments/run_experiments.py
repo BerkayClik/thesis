@@ -57,18 +57,25 @@ def set_seed(seed: int, fast_mode: bool = False):
         # Less reproducible but suitable for quick iteration
         torch.backends.cudnn.deterministic = False
         torch.backends.cudnn.benchmark = True
-        if hasattr(torch.backends.cuda, 'matmul'):
+        # New API (PyTorch 2.9+)
+        if hasattr(torch.backends.cuda.matmul, 'fp32_precision'):
+            torch.backends.cuda.matmul.fp32_precision = 'tf32'
+            torch.backends.cudnn.conv.fp32_precision = 'tf32'
+        # Legacy API fallback
+        elif hasattr(torch.backends.cuda, 'matmul') and hasattr(torch.backends.cuda.matmul, 'allow_tf32'):
             torch.backends.cuda.matmul.allow_tf32 = True
-        if hasattr(torch.backends.cudnn, 'allow_tf32'):
             torch.backends.cudnn.allow_tf32 = True
     else:
         # Strict reproducibility mode (default)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-        # TF32 settings (new API for PyTorch 2.0+) - use IEEE precision for reproducibility
-        if hasattr(torch.backends.cuda, 'matmul'):
+        # New API (PyTorch 2.9+)
+        if hasattr(torch.backends.cuda.matmul, 'fp32_precision'):
+            torch.backends.cuda.matmul.fp32_precision = 'ieee'
+            torch.backends.cudnn.conv.fp32_precision = 'ieee'
+        # Legacy API fallback
+        elif hasattr(torch.backends.cuda, 'matmul') and hasattr(torch.backends.cuda.matmul, 'allow_tf32'):
             torch.backends.cuda.matmul.allow_tf32 = False
-        if hasattr(torch.backends.cudnn, 'allow_tf32'):
             torch.backends.cudnn.allow_tf32 = False
         # For PyTorch 1.11+, enable deterministic algorithms globally
         if hasattr(torch, 'use_deterministic_algorithms'):
