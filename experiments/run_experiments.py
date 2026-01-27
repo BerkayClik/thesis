@@ -27,9 +27,9 @@ from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel
 from src.models.qnn_attention_model import QuaternionLSTMNoAttention
 from src.training.trainer import Trainer
 from src.training.losses import mse_loss
-from src.evaluation.metrics import compute_mae, compute_mse
-from src.evaluation.directional_accuracy import compute_directional_accuracy, compute_directional_accuracy_returns
-from src.evaluation.sharpe_ratio import compute_sharpe_ratio, compute_sharpe_ratio_returns
+from src.evaluation.metrics import compute_mae, compute_mse, compute_mape
+from src.evaluation.directional_accuracy import compute_directional_accuracy
+from src.evaluation.sharpe_ratio import compute_sharpe_ratio
 
 
 def load_config(config_path: str) -> Dict:
@@ -103,7 +103,7 @@ def get_device(config: Dict) -> torch.device:
 
 
 class NaiveBaseline(torch.nn.Module):
-    """Naive baseline that always predicts zero return."""
+    """Naive baseline - predicts last observed close (persistence)."""
 
     def __init__(self):
         super().__init__()
@@ -111,8 +111,8 @@ class NaiveBaseline(torch.nn.Module):
         self.dummy = torch.nn.Parameter(torch.zeros(1), requires_grad=False)
 
     def forward(self, x):
-        batch_size = x.size(0)
-        return torch.zeros(batch_size, device=x.device)
+        # Return the last close price in the window (persistence model)
+        return x[:, -1, 3]  # Last close in window
 
 
 def create_model(model_type: str, hidden_size: int, num_layers: int, dropout: float = 0.0):
@@ -182,7 +182,7 @@ def compute_statistical_significance(
         return {}
 
     significance_results = {}
-    metrics = ['mae', 'mse', 'directional_accuracy', 'sharpe_ratio']
+    metrics = ['mae', 'mse', 'mape', 'directional_accuracy', 'sharpe_ratio']
 
     # Get baseline values
     baseline_runs = results[baseline_model]['individual_runs']
@@ -235,68 +235,54 @@ def evaluate_model(
     model,
     dataloader: DataLoader,
     device: torch.device,
-    norm_stats: Dict = None,
-    predict_returns: bool = True
+    norm_stats: Dict
 ) -> Dict:
     """
     Evaluate model on a dataset.
 
-    Returns dict with MAE, MSE, directional accuracy, and Sharpe ratio.
+    Returns dict with MAE, MSE, MAPE, directional accuracy, and Sharpe ratio.
+    All metrics are computed on denormalized (original scale) prices.
 
     Args:
         model: The model to evaluate.
         dataloader: DataLoader for the evaluation dataset.
         device: Compute device.
-        norm_stats: Normalization statistics (only used when predict_returns=False).
-        predict_returns: If True, targets are returns and use return-based metrics.
+        norm_stats: Normalization statistics for denormalization.
     """
     model.eval()
     all_preds = []
     all_targets = []
+    all_prevs = []
 
     with torch.no_grad():
         for x, y in dataloader:
             x = x.to(device)
             pred = model(x).squeeze().cpu()
+            prev = x[:, -1, 3].cpu()  # Last close in window (normalized)
             all_preds.append(pred)
             all_targets.append(y)
+            all_prevs.append(prev)
 
     preds = torch.cat(all_preds)
     targets = torch.cat(all_targets)
+    prevs = torch.cat(all_prevs)
 
-    if predict_returns:
-        # Targets are returns - use return-based metrics directly
-        # Note: MAPE excluded as it's meaningless for near-zero return values
-        return {
-            'mae': compute_mae(preds, targets),
-            'mse': compute_mse(preds, targets),
-            'directional_accuracy': compute_directional_accuracy_returns(preds, targets),
-            'sharpe_ratio': compute_sharpe_ratio_returns(preds, targets)
-        }
-    else:
-        # Legacy: targets are prices - need previous values and denormalization
-        all_prevs = []
-        with torch.no_grad():
-            for x, y in dataloader:
-                prev = x[:, -1, 3].cpu()
-                all_prevs.append(prev)
-        prevs = torch.cat(all_prevs)
+    # Denormalize for evaluation
+    preds_denorm = denormalize(preds, norm_stats, col=3)
+    targets_denorm = denormalize(targets, norm_stats, col=3)
+    prevs_denorm = denormalize(prevs, norm_stats, col=3)
 
-        if norm_stats is not None:
-            preds_denorm = denormalize(preds, norm_stats, col=3)
-            targets_denorm = denormalize(targets, norm_stats, col=3)
-            prevs_denorm = denormalize(prevs, norm_stats, col=3)
-        else:
-            preds_denorm = preds
-            targets_denorm = targets
-            prevs_denorm = prevs
-
-        return {
-            'mae': compute_mae(preds, targets),
-            'mse': compute_mse(preds, targets),
-            'directional_accuracy': compute_directional_accuracy(preds_denorm, targets_denorm, prevs_denorm),
-            'sharpe_ratio': compute_sharpe_ratio(preds_denorm, targets_denorm, prevs_denorm)
-        }
+    return {
+        'mae': compute_mae(preds_denorm, targets_denorm),
+        'mse': compute_mse(preds_denorm, targets_denorm),
+        'mape': compute_mape(preds_denorm, targets_denorm),
+        'directional_accuracy': compute_directional_accuracy(
+            preds_denorm, targets_denorm, prevs_denorm
+        ),
+        'sharpe_ratio': compute_sharpe_ratio(
+            preds_denorm, targets_denorm, prevs_denorm
+        )
+    }
 
 
 def run_single_experiment(
@@ -307,11 +293,10 @@ def run_single_experiment(
     val_loader: DataLoader,
     test_loader: DataLoader,
     device: torch.device,
-    norm_stats: Dict = None,
+    norm_stats: Dict,
     verbose: bool = True,
     debug: bool = False,
     variant_name: str = "default",
-    predict_returns: bool = True,
     fast_mode: bool = False
 ) -> Dict:
     """
@@ -405,7 +390,7 @@ def run_single_experiment(
                 print(f"    Warning: No checkpoint found, using current model state")
 
     # Evaluate on test set
-    test_metrics = evaluate_model(model, test_loader, device, norm_stats, predict_returns)
+    test_metrics = evaluate_model(model, test_loader, device, norm_stats)
 
     result = {
         'seed': seed,
@@ -452,46 +437,23 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
     # Convert to tensor with dates
     data, dates = dataframe_to_tensor(df)
 
-    # Preprocess - pass predict_returns to compute returns from raw prices
-    predict_returns = config['data'].get('predict_returns', True)
+    # Preprocess data
     processed = preprocess_data(
         data,
         dates=dates,
         train_end_year=config['data']['train_end_year'],
-        val_end_year=config['data']['val_end_year'],
-        predict_returns=predict_returns
+        val_end_year=config['data']['val_end_year']
     )
     train_data = processed['train_data']
     val_data = processed['val_data']
     test_data = processed['test_data']
     norm_stats = processed['norm_stats']
 
-    # Get pre-computed returns from raw prices
-    train_returns = processed.get('train_returns')
-    val_returns = processed.get('val_returns')
-    test_returns = processed.get('test_returns')
-
-    # Create datasets with return-based targets
-    # CRITICAL: Pass pre-computed returns to avoid variance explosion from normalized data
+    # Create datasets (predicting normalized close price)
     window_size = config['data']['window_size']
-    train_dataset = SP500Dataset(
-        train_data,
-        window_size=window_size,
-        predict_returns=predict_returns,
-        returns=train_returns
-    )
-    val_dataset = SP500Dataset(
-        val_data,
-        window_size=window_size,
-        predict_returns=predict_returns,
-        returns=val_returns
-    )
-    test_dataset = SP500Dataset(
-        test_data,
-        window_size=window_size,
-        predict_returns=predict_returns,
-        returns=test_returns
-    )
+    train_dataset = SP500Dataset(train_data, window_size=window_size)
+    val_dataset = SP500Dataset(val_data, window_size=window_size)
+    test_dataset = SP500Dataset(test_data, window_size=window_size)
 
     # Create data loaders
     batch_size = config['training']['batch_size']
@@ -528,7 +490,6 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
                 verbose=verbose,
                 debug=debug,
                 variant_name=variant_name,
-                predict_returns=predict_returns,
                 fast_mode=fast_mode
             )
             variant_results.append(result)
@@ -536,6 +497,7 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
         # Aggregate results
         test_maes = [r['test_metrics']['mae'] for r in variant_results]
         test_mses = [r['test_metrics']['mse'] for r in variant_results]
+        test_mapes = [r['test_metrics']['mape'] for r in variant_results]
         test_das = [r['test_metrics']['directional_accuracy'] for r in variant_results]
         test_sharpes = [r['test_metrics']['sharpe_ratio'] for r in variant_results]
 
@@ -544,6 +506,7 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
             'aggregated': {
                 'mae': {'mean': np.mean(test_maes), 'std': np.std(test_maes)},
                 'mse': {'mean': np.mean(test_mses), 'std': np.std(test_mses)},
+                'mape': {'mean': np.mean(test_mapes), 'std': np.std(test_mapes)},
                 'directional_accuracy': {'mean': np.mean(test_das), 'std': np.std(test_das)},
                 'sharpe_ratio': {'mean': np.mean(test_sharpes), 'std': np.std(test_sharpes)}
             }
@@ -553,6 +516,7 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
             print(f"  Results (mean ± std over {len(seeds)} seeds):")
             print(f"    MAE: {np.mean(test_maes):.4f} ± {np.std(test_maes):.4f}")
             print(f"    MSE: {np.mean(test_mses):.4f} ± {np.std(test_mses):.4f}")
+            print(f"    MAPE: {np.mean(test_mapes):.2f}% ± {np.std(test_mapes):.2f}%")
             print(f"    Dir Acc: {np.mean(test_das):.2f}% ± {np.std(test_das):.2f}%")
             print(f"    Sharpe: {np.mean(test_sharpes):.3f} ± {np.std(test_sharpes):.3f}")
 
@@ -575,17 +539,18 @@ def print_results_table(results: Dict):
     print("=" * 100)
 
     # Header
-    print(f"{'Model':<35} {'MAE':<18} {'MSE':<18} {'Dir Acc (%)':<16} {'Sharpe':<12}")
+    print(f"{'Model':<30} {'MAE':<16} {'MSE':<16} {'MAPE (%)':<14} {'Dir Acc (%)':<14} {'Sharpe':<10}")
     print("-" * 100)
 
     # Rows
     for model_name, model_data in model_results.items():
         agg = model_data['aggregated']
-        mae_str = f"{agg['mae']['mean']:.4f} ± {agg['mae']['std']:.4f}"
-        mse_str = f"{agg['mse']['mean']:.4f} ± {agg['mse']['std']:.4f}"
+        mae_str = f"{agg['mae']['mean']:.2f} ± {agg['mae']['std']:.2f}"
+        mse_str = f"{agg['mse']['mean']:.2f} ± {agg['mse']['std']:.2f}"
+        mape_str = f"{agg['mape']['mean']:.2f} ± {agg['mape']['std']:.2f}"
         da_str = f"{agg['directional_accuracy']['mean']:.2f} ± {agg['directional_accuracy']['std']:.2f}"
         sharpe_str = f"{agg['sharpe_ratio']['mean']:.3f} ± {agg['sharpe_ratio']['std']:.3f}"
-        print(f"{model_name:<35} {mae_str:<18} {mse_str:<18} {da_str:<16} {sharpe_str:<12}")
+        print(f"{model_name:<30} {mae_str:<16} {mse_str:<16} {mape_str:<14} {da_str:<14} {sharpe_str:<10}")
 
     print("=" * 100)
 

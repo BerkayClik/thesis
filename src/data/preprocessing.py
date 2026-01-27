@@ -111,59 +111,29 @@ def encode_quaternion(ohlc: torch.Tensor) -> torch.Tensor:
     return ohlc.clone()
 
 
-def compute_returns(data: torch.Tensor, target_col: int = 3) -> torch.Tensor:
-    """
-    Compute percentage returns from raw (unnormalized) prices.
-
-    Returns are computed as: return[t] = (close[t+1] - close[t]) / close[t]
-
-    This gives len(data) - 1 returns, where return[t] corresponds to
-    the return from time t to time t+1.
-
-    Args:
-        data: Tensor of shape (num_samples, num_features) with raw prices.
-        target_col: Index of the close price column (default: 3).
-
-    Returns:
-        Tensor of shape (num_samples - 1,) containing percentage returns.
-    """
-    close_prices = data[:, target_col]
-    # return[t] = (close[t+1] - close[t]) / close[t]
-    returns = (close_prices[1:] - close_prices[:-1]) / (close_prices[:-1].abs() + 1e-8)
-    return returns
-
-
 def preprocess_data(
     data: torch.Tensor,
     dates: pd.DatetimeIndex,
     train_end_year: int = 2018,
-    val_end_year: int = 2021,
-    predict_returns: bool = True
+    val_end_year: int = 2021
 ) -> Dict:
     """
-    Complete preprocessing pipeline: split, compute returns, normalize, encode.
+    Complete preprocessing pipeline: split, normalize, encode.
 
     CRITICAL: Normalization statistics are computed from training data ONLY
     to prevent look-ahead bias.
-
-    CRITICAL: Returns are computed from RAW (unnormalized) prices to avoid
-    the variance explosion issue when dividing near-zero normalized values.
 
     Args:
         data: Raw OHLC tensor of shape (num_samples, 4).
         dates: DatetimeIndex corresponding to data rows.
         train_end_year: Last year of training data.
         val_end_year: Last year of validation data.
-        predict_returns: If True, compute percentage returns from raw prices.
 
     Returns:
         Dictionary containing:
         - train_data: Normalized quaternion-encoded training data
         - val_data: Normalized quaternion-encoded validation data
         - test_data: Normalized quaternion-encoded test data
-        - train_returns: Returns computed from raw prices (if predict_returns=True)
-        - val_returns: Returns computed from raw prices (if predict_returns=True)
-        - test_returns: Returns computed from raw prices (if predict_returns=True)
         - norm_stats: Normalization statistics (from train only)
         - split_info: Split boundary information
     """
@@ -172,25 +142,15 @@ def preprocess_data(
         data, dates, train_end_year, val_end_year
     )
 
-    # Step 2: Compute returns from RAW prices BEFORE normalization
-    # This is critical - computing returns on normalized data causes variance explosion
-    train_returns = None
-    val_returns = None
-    test_returns = None
-    if predict_returns:
-        train_returns = compute_returns(train_raw)
-        val_returns = compute_returns(val_raw)
-        test_returns = compute_returns(test_raw)
-
-    # Step 3: Compute normalization stats from TRAIN ONLY
+    # Step 2: Compute normalization stats from TRAIN ONLY
     _, norm_stats = normalize_data(train_raw)
 
-    # Step 4: Apply normalization using train stats to all splits
+    # Step 3: Apply normalization using train stats to all splits
     train_norm, _ = normalize_data(train_raw, stats=norm_stats)
     val_norm, _ = normalize_data(val_raw, stats=norm_stats)
     test_norm, _ = normalize_data(test_raw, stats=norm_stats)
 
-    # Step 5: Quaternion encoding (semantic transformation)
+    # Step 4: Quaternion encoding (semantic transformation)
     train_quat = encode_quaternion(train_norm)
     val_quat = encode_quaternion(val_norm)
     test_quat = encode_quaternion(test_norm)
@@ -199,9 +159,6 @@ def preprocess_data(
         'train_data': train_quat,
         'val_data': val_quat,
         'test_data': test_quat,
-        'train_returns': train_returns,
-        'val_returns': val_returns,
-        'test_returns': test_returns,
         'norm_stats': norm_stats,
         'split_info': split_info
     }

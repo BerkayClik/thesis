@@ -157,7 +157,6 @@ thesis/
 │   ├── run_experiments.py     # Main experiment runner
 │   └── results/               # JSON results & checkpoints
 │
-├── tests/                     # Comprehensive test suite
 │
 └── docs/
     ├── ARCHITECTURE.md        # Detailed technical documentation
@@ -200,17 +199,6 @@ python experiments/run_experiments.py \
 
 # Run with debug mode (gradient tracking)
 python experiments/run_experiments.py --debug
-```
-
-### Running Tests
-
-```bash
-# Run all tests
-pytest tests/ -v
-
-# Run specific test phases
-pytest tests/test_phase3_quaternion.py -v  # Quaternion operations
-pytest tests/test_phase5_full_model.py -v  # Full model tests
 ```
 
 ---
