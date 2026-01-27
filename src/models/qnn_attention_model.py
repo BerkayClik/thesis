@@ -52,12 +52,8 @@ class QuaternionLSTMBase(nn.Module):
         self.projection_size = hidden_size * 4
         self.projection = nn.Linear(self.projection_size, hidden_size)
 
-        # Regression head
-        self.output_head = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.ReLU(),
-            nn.Linear(hidden_size // 2, 1)
-        )
+        # Regression head (single linear layer, matching real LSTM simplicity)
+        self.output_head = nn.Linear(hidden_size, 1)
 
     def encode_quaternion(self, x: torch.Tensor) -> torch.Tensor:
         """
