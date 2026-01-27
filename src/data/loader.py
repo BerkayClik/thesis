@@ -15,35 +15,49 @@ import yfinance as yf
 
 def download_sp500_data(
     ticker: str = "^GSPC",
-    start_date: str = "2000-01-01",
-    end_date: str = "2024-12-31",
+    start_date: Optional[str] = "2000-01-01",
+    end_date: Optional[str] = "2024-12-31",
     cache_dir: Optional[str] = None,
-    interval: str = "1d"
+    interval: str = "1d",
+    period: Optional[str] = None
 ) -> pd.DataFrame:
     """
     Download S&P 500 OHLC data from Yahoo Finance.
 
     Args:
         ticker: Yahoo Finance ticker symbol (default: ^GSPC for S&P 500).
-        start_date: Start date in YYYY-MM-DD format.
-        end_date: End date in YYYY-MM-DD format.
+        start_date: Start date in YYYY-MM-DD format (ignored if period is set).
+        end_date: End date in YYYY-MM-DD format (ignored if period is set).
         cache_dir: Optional directory to cache downloaded data.
         interval: Data interval (default: "1d" for daily).
                   Options: "1h" (hourly), "1d" (daily), etc.
                   Note: Hourly data is limited to last ~730 days on Yahoo Finance.
+        period: Data period (e.g., "730d", "2y", "max"). If set, overrides start/end dates.
+                Recommended for hourly data to get maximum available data.
 
     Returns:
         DataFrame with columns [Open, High, Low, Close] and DatetimeIndex.
     """
     # Download data from Yahoo Finance
-    df = yf.download(
-        ticker,
-        start=start_date,
-        end=end_date,
-        interval=interval,
-        auto_adjust=True,
-        progress=False
-    )
+    if period is not None:
+        # Use period for rolling window (recommended for hourly data)
+        df = yf.download(
+            ticker,
+            period=period,
+            interval=interval,
+            auto_adjust=True,
+            progress=False
+        )
+    else:
+        # Use fixed date range
+        df = yf.download(
+            ticker,
+            start=start_date,
+            end=end_date,
+            interval=interval,
+            auto_adjust=True,
+            progress=False
+        )
 
     # Handle multi-level columns if present (yfinance returns MultiIndex for single ticker)
     if isinstance(df.columns, pd.MultiIndex):
@@ -56,12 +70,15 @@ def download_sp500_data(
     df = df.dropna()
 
     # Cache if directory specified
-    if cache_dir is not None:
+    if cache_dir is not None and len(df) > 0:
         cache_path = Path(cache_dir)
         cache_path.mkdir(parents=True, exist_ok=True)
         # Include interval in cache filename to differentiate daily vs hourly data
         interval_suffix = f"_{interval}" if interval != "1d" else ""
-        cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{start_date}_{end_date}{interval_suffix}.csv"
+        if period is not None:
+            cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{period}{interval_suffix}.csv"
+        else:
+            cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{start_date}_{end_date}{interval_suffix}.csv"
         df.to_csv(cache_file)
 
     return df
@@ -70,10 +87,11 @@ def download_sp500_data(
 def load_sp500_data(
     data_path: Optional[str] = None,
     ticker: str = "^GSPC",
-    start_date: str = "2000-01-01",
-    end_date: str = "2024-12-31",
+    start_date: Optional[str] = "2000-01-01",
+    end_date: Optional[str] = "2024-12-31",
     cache_dir: Optional[str] = None,
-    interval: str = "1d"
+    interval: str = "1d",
+    period: Optional[str] = None
 ) -> pd.DataFrame:
     """
     Load S&P 500 data from cache or download if not available.
@@ -81,11 +99,12 @@ def load_sp500_data(
     Args:
         data_path: Path to cached CSV file. If None, checks cache_dir or downloads.
         ticker: Yahoo Finance ticker symbol.
-        start_date: Start date in YYYY-MM-DD format.
-        end_date: End date in YYYY-MM-DD format.
+        start_date: Start date in YYYY-MM-DD format (ignored if period is set).
+        end_date: End date in YYYY-MM-DD format (ignored if period is set).
         cache_dir: Directory to look for/store cached data.
         interval: Data interval (default: "1d" for daily).
                   Options: "1h" (hourly), "1d" (daily), etc.
+        period: Data period (e.g., "730d", "2y", "max"). If set, overrides start/end dates.
 
     Returns:
         DataFrame with columns [Open, High, Low, Close] and DatetimeIndex.
@@ -100,7 +119,10 @@ def load_sp500_data(
     if cache_dir is not None:
         cache_path = Path(cache_dir)
         interval_suffix = f"_{interval}" if interval != "1d" else ""
-        cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{start_date}_{end_date}{interval_suffix}.csv"
+        if period is not None:
+            cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{period}{interval_suffix}.csv"
+        else:
+            cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{start_date}_{end_date}{interval_suffix}.csv"
         if cache_file.exists():
             df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
             return df
@@ -111,7 +133,8 @@ def load_sp500_data(
         start_date=start_date,
         end_date=end_date,
         cache_dir=cache_dir,
-        interval=interval
+        interval=interval,
+        period=period
     )
 
 

@@ -462,10 +462,11 @@ def run_experiment(
 
     df = load_sp500_data(
         ticker=config['data']['ticker'],
-        start_date=config['data']['start_date'],
-        end_date=config['data']['end_date'],
+        start_date=config['data'].get('start_date'),
+        end_date=config['data'].get('end_date'),
         cache_dir=config['data'].get('cache_dir', 'data/cache'),
-        interval=config['data'].get('interval', '1d')
+        interval=config['data'].get('interval', '1d'),
+        period=config['data'].get('period')
     )
 
     if verbose:
