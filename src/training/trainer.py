@@ -68,12 +68,16 @@ class Trainer:
         optimizer: Optimizer instance.
         loss_fn: Loss function.
         device: Device to train on.
-        checkpoint_dir: Directory for saving checkpoints.
+        checkpoint_dir: Base directory for saving checkpoints.
+        model_name: Optional model name for checkpoint subdirectory organization.
+        seed: Optional seed for checkpoint subdirectory organization.
         max_grad_norm: Maximum gradient norm for clipping. None disables clipping.
         scheduler_config: Optional dict with scheduler settings.
             Example: {'type': 'reduce_on_plateau', 'factor': 0.5, 'patience': 5}
         debug: Enable debug mode with gradient tracking.
         grad_explosion_threshold: Gradient norm threshold for explosion warning.
+
+    Checkpoint paths are organized as: checkpoint_dir/model_name/seed_N/
     """
 
     def __init__(
@@ -83,6 +87,8 @@ class Trainer:
         loss_fn: Callable,
         device: torch.device,
         checkpoint_dir: str = "checkpoints",
+        model_name: Optional[str] = None,
+        seed: Optional[int] = None,
         max_grad_norm: Optional[float] = 1.0,
         scheduler_config: Optional[Dict[str, Any]] = None,
         debug: bool = False,
@@ -92,6 +98,13 @@ class Trainer:
         self.optimizer = optimizer
         self.loss_fn = loss_fn
         self.device = device
+
+        # Build checkpoint path with optional model_name and seed subdirectories
+        if model_name:
+            checkpoint_dir = os.path.join(checkpoint_dir, model_name)
+        if seed is not None:
+            checkpoint_dir = os.path.join(checkpoint_dir, f"seed_{seed}")
+
         self.checkpoint_dir = checkpoint_dir
         self.max_grad_norm = max_grad_norm
         self.debug = debug

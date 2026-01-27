@@ -54,3 +54,8 @@ evaluation:
 
 # Device settings
 device: "cuda"  # Options: cuda, cpu, mps
+
+# Output settings
+output:
+  results_dir: "experiments/results"
+  checkpoint_dir: "checkpoints"
