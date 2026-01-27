@@ -299,6 +299,22 @@ Can learn that "3 days ago was important for this prediction" rather than always
 
 Replaces standard operations with quaternion operations.
 
+### Quaternion Input Encoding
+
+OHLC data is encoded as a single quaternion feature (`input_size=1`). This approach:
+
+- Maps the 4 OHLC values (Open, High, Low, Close) directly to the 4 quaternion components (r, i, j, k)
+- Captures inter-OHLC relationships through the Hamilton product during gate computations
+- Follows the approach used in quaternion neural network literature (Gaudet & Maida 2018)
+
+```python
+# Input shape transformation
+raw_input: (batch, seq_len, 4)      # OHLC features
+q_input:   (batch, seq_len, 1, 4)   # 1 quaternion feature with 4 components
+```
+
+This is why `QNNAttentionModel` uses `input_size=1` when instantiating the QuaternionLSTM.
+
 ### Key Difference: Quaternion Linear Layer
 
 In a normal linear layer:
