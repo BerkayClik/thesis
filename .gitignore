@@ -100,6 +100,7 @@ checkpoints/
 
 # Experiment outputs
 experiments/results/
+experiments/figures/
 experiments/outputs/
 *.log
 

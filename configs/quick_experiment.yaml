@@ -21,37 +21,7 @@ experiment:
         hidden_size: 64
         num_layers: 2
         dropout: 0.1
-
-    # === PARAMETER-MATCHED MODELS (PRIMARY) ===
-    - name: "quaternion_lstm_param_matched"
-      model:
-        type: "quaternion_lstm"
-        hidden_size: 32
-        num_layers: 2
-        dropout: 0.1
-
-    - name: "quaternion_lstm_attention_param_matched"
-      model:
-        type: "quaternion_lstm_attention"
-        hidden_size: 32
-        num_layers: 2
-        dropout: 0.1
-
-    # === LAYER-MATCHED QUATERNION MODELS (SECONDARY) ===
-    - name: "quaternion_lstm"
-      model:
-        type: "quaternion_lstm"
-        hidden_size: 64
-        num_layers: 2
-        dropout: 0.1
-
-    - name: "quaternion_lstm_attention"
-      model:
-        type: "quaternion_lstm_attention"
-        hidden_size: 64
-        num_layers: 2
-        dropout: 0.1
-
+        
 # Override base.yaml training settings for faster iteration
 training:
   num_epochs: 50      # Reduced from 100

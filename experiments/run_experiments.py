@@ -257,7 +257,12 @@ def evaluate_model(
     with torch.no_grad():
         for x, y in dataloader:
             x = x.to(device)
-            pred = model(x).squeeze().cpu()
+            pred = model(x).cpu()
+            # Handle different output shapes: (batch,), (batch, 1), etc.
+            if pred.dim() > 1:
+                pred = pred.squeeze(-1)  # Only squeeze last dim to preserve batch
+            if pred.dim() == 0:
+                pred = pred.unsqueeze(0)  # Handle single-sample batch
             prev = x[:, -1, 3].cpu()  # Last close in window (normalized)
             all_preds.append(pred)
             all_targets.append(y)
@@ -281,7 +286,11 @@ def evaluate_model(
         ),
         'sharpe_ratio': compute_sharpe_ratio(
             preds_denorm, targets_denorm, prevs_denorm
-        )
+        ),
+        # Store predictions for visualization
+        'predictions': preds_denorm.numpy().tolist(),
+        'targets': targets_denorm.numpy().tolist(),
+        'prev_closes': prevs_denorm.numpy().tolist()
     }
 
 
@@ -415,11 +424,26 @@ def run_single_experiment(
     return result
 
 
-def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, debug: bool = False) -> Dict:
+def run_experiment(
+    config: Dict,
+    experiment_config: Dict,
+    verbose: bool = True,
+    debug: bool = False,
+    output_dir: str = None,
+    experiment_name: str = None
+) -> Dict:
     """
     Run a complete experiment with multiple seeds.
 
     Returns aggregated results with mean and std across seeds.
+
+    Args:
+        config: Base configuration dictionary.
+        experiment_config: Experiment-specific configuration.
+        verbose: Whether to print progress information.
+        debug: Whether to enable debug mode.
+        output_dir: Directory for intermediate results (enables rolling save).
+        experiment_name: Experiment name for intermediate results filename.
     """
     device = get_device(config)
 
@@ -512,6 +536,10 @@ def run_experiment(config: Dict, experiment_config: Dict, verbose: bool = True, 
             }
         }
 
+        # Rolling save after each variant
+        if output_dir and experiment_name:
+            save_intermediate_results(all_results, output_dir, experiment_name)
+
         if verbose:
             print(f"  Results (mean ± std over {len(seeds)} seeds):")
             print(f"    MAE: {np.mean(test_maes):.4f} ± {np.std(test_maes):.4f}")
@@ -571,6 +599,45 @@ def print_results_table(results: Dict):
         print("=" * 100)
 
 
+def convert_to_serializable(obj):
+    """Convert numpy types to JSON-serializable Python types."""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif isinstance(obj, (np.float32, np.float64)):
+        return float(obj)
+    elif isinstance(obj, (np.int32, np.int64)):
+        return int(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_to_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_serializable(v) for v in obj]
+    return obj
+
+
+def save_intermediate_results(results: Dict, output_dir: str, experiment_name: str):
+    """Save intermediate results after each variant (overwrites same file)."""
+    os.makedirs(output_dir, exist_ok=True)
+
+    filename = f"{experiment_name}_intermediate.json"
+    filepath = os.path.join(output_dir, filename)
+
+    # Statistical significance not computed yet for intermediate results
+    intermediate = {
+        'model_results': results,
+        'status': 'in_progress',
+        'completed_variants': list(results.keys())
+    }
+
+    serializable_results = convert_to_serializable(intermediate)
+
+    with open(filepath, 'w') as f:
+        json.dump(serializable_results, f, indent=2)
+
+    print(f"  [Intermediate results saved to {filepath}]")
+
+
 def save_results(results: Dict, output_dir: str, experiment_name: str):
     """Save results to JSON file."""
     os.makedirs(output_dir, exist_ok=True)
@@ -579,28 +646,18 @@ def save_results(results: Dict, output_dir: str, experiment_name: str):
     filename = f"{experiment_name}_{timestamp}.json"
     filepath = os.path.join(output_dir, filename)
 
-    # Convert numpy types for JSON serialization
-    def convert_to_serializable(obj):
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, (np.bool_, bool)):
-            return bool(obj)
-        elif isinstance(obj, (np.float32, np.float64)):
-            return float(obj)
-        elif isinstance(obj, (np.int32, np.int64)):
-            return int(obj)
-        elif isinstance(obj, dict):
-            return {k: convert_to_serializable(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [convert_to_serializable(v) for v in obj]
-        return obj
-
     serializable_results = convert_to_serializable(results)
 
     with open(filepath, 'w') as f:
         json.dump(serializable_results, f, indent=2)
 
     print(f"\nResults saved to: {filepath}")
+
+    # Delete intermediate file after final save
+    intermediate_path = os.path.join(output_dir, f"{experiment_name}_intermediate.json")
+    if os.path.exists(intermediate_path):
+        os.remove(intermediate_path)
+        print(f"Intermediate file removed: {intermediate_path}")
 
 
 def main():
@@ -639,20 +696,24 @@ def main():
         print("DEBUG MODE ENABLED - Tracking gradients and weight statistics")
         print()
 
-    # Run experiments
+    # Get output settings
+    output_dir = experiment_config.get('output', {}).get('results_dir', 'experiments/results')
+    experiment_name = experiment_config['experiment']['name']
+
+    # Run experiments with rolling save
     results = run_experiment(
         config=base_config,
         experiment_config=experiment_config['experiment'],
         verbose=not args.quiet,
-        debug=args.debug
+        debug=args.debug,
+        output_dir=output_dir,
+        experiment_name=experiment_name
     )
 
     # Print results table
     print_results_table(results)
 
-    # Save results
-    output_dir = experiment_config.get('output', {}).get('results_dir', 'experiments/results')
-    experiment_name = experiment_config['experiment']['name']
+    # Save final results (also cleans up intermediate file)
     save_results(results, output_dir, experiment_name)
 
 
