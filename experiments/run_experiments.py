@@ -11,6 +11,7 @@ import os
 import sys
 import json
 import argparse
+import gc
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from torch.utils.data import DataLoader
@@ -429,6 +430,13 @@ def run_single_experiment(
                 'last_epoch': grad_norms[-1] if grad_norms else None,
                 'mean_across_epochs': sum(g['mean'] for g in grad_norms) / len(grad_norms)
             }
+
+    # Memory cleanup to prevent OOM during multi-seed/variant runs
+    del model
+    if 'trainer' in locals():
+        del trainer
+    gc.collect()
+    torch.cuda.empty_cache()
 
     return result
 
