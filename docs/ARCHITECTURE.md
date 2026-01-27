@@ -48,7 +48,7 @@ You should be familiar with:
 - Low (L) - lowest price that day
 - Close (C) - price when market closed
 
-**Output:** Predicted percentage return for the next day
+**Output:** Predicted normalized Close price for the next day
 
 **Shape:** `(batch_size, 20, 4)` → `(batch_size, 1)`
 
@@ -560,7 +560,7 @@ We run **7 variants** in experiments. This includes a naive baseline plus 6 mode
 | 5 | `quaternion_lstm_param_matched` | Quaternion LSTM | 32 | Parameter-matched |
 | 6 | `quaternion_lstm_attention_param_matched` | Quaternion LSTM + Attention | 32 | Parameter-matched |
 
-**Naive baseline:** Always predicts zero return. Establishes that models are learning something meaningful (should achieve ~50% directional accuracy by chance).
+**Naive baseline:** Always predicts zero (no price change). Establishes that models are learning something meaningful.
 
 **Layer-matched (hidden=64):** Same architecture depth as real LSTM, but quaternion has more parameters. Tests if quaternion math itself helps.
 
@@ -631,7 +631,7 @@ Real:       LSTM  → Last timestep(hidden) → Output Head
 
 ### What We're Testing
 
-The research question: **Does quaternion encoding help predict stock returns?**
+The research question: **Does quaternion encoding help predict stock prices?**
 
 - Compare all models vs naive_zero → Verify models learn meaningful patterns
 - Compare Real LSTM vs Quaternion LSTM → Effect of quaternion encoding
@@ -650,14 +650,13 @@ Raw OHLC Data (2015-2024)
 ┌─────────────────────────────┐
 │      Preprocessing          │
 │  1. Temporal split (raw)    │
-│  2. Compute returns (raw)   │  ◄── Returns from RAW prices
-│  3. Z-score normalize       │
-│  4. Sliding windows         │
+│  2. Z-score normalize       │
+│  3. Sliding windows         │
 └──────────┬──────────────────┘
            │
            ▼
     X: (batch, 20, 4) normalized OHLC
-    y: returns from raw prices
+    y: next-day normalized Close price
            │
     ┌──────┴──────┐
     │             │
@@ -704,7 +703,8 @@ Last step    Attention
       (batch, 1)
            │
            ▼
-   Predicted Return
+   Predicted Close Price
+        (normalized)
 ```
 
 ---
@@ -737,20 +737,12 @@ Timeline: 2015 ─────────────────────�
 
 ### Preprocessing Pipeline Order
 
-**Critical:** Returns must be computed from **raw prices** before normalization. Computing returns from normalized data causes training instability because:
-- Normalized prices have mean≈0, causing division by near-zero values
-- This creates inconsistent target scales depending on where in the price distribution each sample falls
-
 ```python
 # Step 1: Temporal split (on RAW data)
 train_raw, val_raw, test_raw = temporal_split(raw_data, dates)
 
-# Step 2: Compute returns from RAW prices BEFORE normalization
-train_returns = (close[1:] - close[:-1]) / close[:-1]  # ~3-4% daily std for BTC
-val_returns = compute_returns(val_raw)
-test_returns = compute_returns(test_raw)
-
-# Step 3: Z-score normalize OHLC features (for model inputs)
+# Step 2: Z-score normalize OHLC features
+# CRITICAL: Stats computed from TRAIN only to prevent data leakage
 train_mean = train_raw.mean()
 train_std = train_raw.std()
 
@@ -758,8 +750,8 @@ train_normalized = (train_raw - train_mean) / train_std
 val_normalized = (val_raw - train_mean) / train_std    # Uses TRAIN stats
 test_normalized = (test_raw - train_mean) / train_std  # Uses TRAIN stats
 
-# Step 4: Dataset uses normalized inputs + raw returns as targets
-dataset = SP500Dataset(train_normalized, returns=train_returns)
+# Step 3: Create sliding window datasets
+dataset = SP500Dataset(train_normalized, window_size=20)
 ```
 
 ### Sliding Window Creation
@@ -768,10 +760,10 @@ Data is converted to supervised learning format:
 
 ```
 Input Window (X): 20 consecutive days of NORMALIZED OHLC
-Target (y): Percentage return computed from RAW prices
+Target (y): Next-day NORMALIZED Close price
 
 Day:    1   2   3  ...  19  20  │ 21
-        └─ X (normalized) ─────┘  └── y = (RawClose₂₁ - RawClose₂₀) / RawClose₂₀
+        └─ X (normalized) ─────┘  └── y = NormalizedClose₂₁
 ```
 
 ---
@@ -897,22 +889,23 @@ After training completes, the **best checkpoint** is loaded and evaluated on the
 |--------|---------|----------------|
 | MAE | `mean(\|pred - target\|)` | Average prediction error magnitude |
 | MSE | `mean((pred - target)²)` | Penalizes large errors more heavily |
-| Directional Accuracy | `% where sign(pred) == sign(target)` | Did we predict up/down correctly? |
+| Directional Accuracy | `% where sign(pred - prev) == sign(target - prev)` | Did we predict up/down correctly? |
 | Sharpe Ratio | `mean(strategy_returns) / std(strategy_returns)` | Risk-adjusted trading performance |
-
-**Note:** MAPE (Mean Absolute Percentage Error) is intentionally excluded. When predicting returns (values near zero), MAPE becomes unstable due to division by near-zero values, producing meaningless results (e.g., 800%+ error).
 
 **Directional Accuracy:**
 ```python
-# If model predicts +0.5% and actual is +0.3% → Correct (both positive)
-# If model predicts +0.5% and actual is -0.3% → Wrong (opposite signs)
-accuracy = (sign(pred) == sign(target)).mean() * 100
+# Compare predicted vs actual DIRECTION relative to previous day
+pred_direction = sign(pred - prev)      # Did model predict up or down?
+target_direction = sign(target - prev)  # Did price actually go up or down?
+accuracy = (pred_direction == target_direction).mean() * 100
 ```
 
 **Sharpe Ratio (Trading Strategy):**
 ```python
-# Strategy: Long when pred > 0, Short when pred < 0
-strategy_returns = sign(pred_return) * actual_return
+# Strategy: Long when predicted direction is up, short when down
+actual_returns = (target - prev) / prev
+pred_direction = sign(pred - prev)
+strategy_returns = pred_direction * actual_returns
 sharpe = mean(strategy_returns) / std(strategy_returns)
 ```
 
