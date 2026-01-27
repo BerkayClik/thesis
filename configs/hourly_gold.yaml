@@ -1,18 +1,18 @@
 # Configuration for Quaternion Neural Networks
-# Gold Forex / Spot Gold (XAUUSD=X) Hourly Forecasting Project
+# Gold Futures (GC=F) Hourly Forecasting Project
 
 # Data settings
 data:
   # Data source
-  ticker: "XAUUSD=X"  # Spot Gold Forex
+  ticker: "GC=F"  # Gold Futures (COMEX)
   interval: "1h"  # Hourly data
   # Use period for rolling window (Yahoo Finance hourly limit: ~730 days)
   period: "730d"
   cache_dir: "data/cache"
 
   # Window settings
-  # 72 bars = ~3 days for Forex markets (5 days/week, ~24 hours/day)
-  # ~23 bars/day average
+  # 72 bars = ~3 days for futures markets
+  # COMEX Gold futures trade nearly 24 hours on weekdays
   window_size: 72
   target_col: 3  # Close price
 
@@ -20,8 +20,6 @@ data:
   train_ratio: 0.70
   val_ratio: 0.10
   test_ratio: 0.20
-  # Expected data points: ~12,500 total
-  # Train: ~8,750 | Val: ~1,250 | Test: ~2,500
 
 # Model settings
 model:
