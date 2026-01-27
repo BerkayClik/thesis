@@ -921,7 +921,7 @@ sharpe = mean(strategy_returns) / std(strategy_returns)
             ┌──────────────────────────────┐
             │    Create DataLoaders        │
             │  ─────────────────────────── │
-            │  • train_loader (shuffle=T)  │
+            │  • train_loader (shuffle=F)  │
             │  • val_loader (shuffle=F)    │
             │  • test_loader (shuffle=F)   │
             └──────────────┬───────────────┘
