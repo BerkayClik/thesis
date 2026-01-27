@@ -45,6 +45,7 @@ experiment:
         hidden_size: 32  # Reduced to match real LSTM param count (~51k)
         num_layers: 2
         dropout: 0.1
+      learning_rate: 0.0001
 
     - name: "quaternion_lstm_attention_param_matched"
       model:
@@ -52,6 +53,7 @@ experiment:
         hidden_size: 32  # Reduced to match real LSTM param count
         num_layers: 2
         dropout: 0.1
+      learning_rate: 0.0001
 
     # === LAYER-MATCHED QUATERNION MODELS (SECONDARY - More Parameters) ===
     # Same num_layers=2 as real LSTM but ~4x more parameters
@@ -62,6 +64,7 @@ experiment:
         hidden_size: 64
         num_layers: 2  # Matched to real LSTM (but 4x params)
         dropout: 0.1
+      learning_rate: 0.0001
 
     - name: "quaternion_lstm_attention"
       model:
@@ -69,6 +72,7 @@ experiment:
         hidden_size: 64
         num_layers: 2  # Matched to real LSTM (but 4x params)
         dropout: 0.1
+      learning_rate: 0.0001
 
 # Ablation studies
 ablation:

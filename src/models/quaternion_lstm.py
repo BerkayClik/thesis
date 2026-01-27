@@ -53,9 +53,9 @@ class QuaternionLSTMCell(nn.Module):
         self.W_ho = QuaternionLinear(hidden_size, hidden_size)
 
         # LayerNorm for stabilizing cell and hidden states
-        # Applied over the hidden_size dimension (feature-wise normalization)
-        self.cell_norm = nn.LayerNorm(hidden_size)
-        self.hidden_norm = nn.LayerNorm(hidden_size)
+        # Applied over the quaternion components (4D normalization)
+        self.cell_norm = nn.LayerNorm(4)
+        self.hidden_norm = nn.LayerNorm(4)
 
         # Initialize forget gate bias to +1.0 for better gradient flow
         # (per Jozefowicz et al. 2015 "An Empirical Exploration of RNN Architectures")
@@ -146,18 +146,11 @@ class QuaternionLSTMCell(nn.Module):
         # New cell state: c_new = f * c + i * g
         # Using Hamilton product for quaternion multiplication
         c_new = hamilton_product(f, c) + hamilton_product(i, g)
-        # Apply LayerNorm to stabilize cell state magnitudes
-        # Transpose to normalize over hidden_size dimension, then transpose back
-        c_new = c_new.transpose(1, 2)      # (batch, 4, hidden_size)
-        c_new = self.cell_norm(c_new)       # Normalize over hidden_size
-        c_new = c_new.transpose(1, 2)      # (batch, hidden_size, 4)
+        c_new = self.cell_norm(c_new)
 
         # New hidden state: h_new = o * tanh(c_new)
         h_new = hamilton_product(o, self._quaternion_tanh(c_new))
-        # Apply LayerNorm to stabilize hidden state magnitudes
-        h_new = h_new.transpose(1, 2)      # (batch, 4, hidden_size)
-        h_new = self.hidden_norm(h_new)     # Normalize over hidden_size
-        h_new = h_new.transpose(1, 2)      # (batch, hidden_size, 4)
+        h_new = self.hidden_norm(h_new)
 
         return h_new, c_new
 

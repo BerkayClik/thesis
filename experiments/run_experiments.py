@@ -304,6 +304,7 @@ def evaluate_model(
 def run_single_experiment(
     config: Dict,
     model_config: Dict,
+    variant: Dict,
     seed: int,
     train_loader: DataLoader,
     val_loader: DataLoader,
@@ -353,10 +354,11 @@ def run_single_experiment(
         model.to(device)
         history = {'train_loss': [], 'val_loss': [], 'best_epoch': 0}
     else:
-        # Optimizer
+        # Check for per-variant learning rate override
+        variant_lr = variant.get('learning_rate', config['training']['learning_rate'])
         optimizer = torch.optim.Adam(
             model.parameters(),
-            lr=config['training']['learning_rate']
+            lr=variant_lr
         )
 
         # Trainer - use unique checkpoint dir per variant and seed to avoid conflicts
@@ -512,6 +514,7 @@ def run_experiment(
             result = run_single_experiment(
                 config=config,
                 model_config=model_config,
+                variant=variant,
                 seed=seed,
                 train_loader=train_loader,
                 val_loader=val_loader,
