@@ -81,6 +81,63 @@ def temporal_split(
     return train_data, val_data, test_data, split_info
 
 
+def temporal_split_ratio(
+    data: torch.Tensor,
+    dates: pd.DatetimeIndex,
+    train_ratio: float = 0.70,
+    val_ratio: float = 0.10,
+    test_ratio: float = 0.20
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]:
+    """
+    Split data temporally by ratio without shuffling.
+
+    Args:
+        data: Full dataset tensor of shape (num_samples, num_features).
+        dates: DatetimeIndex corresponding to data rows.
+        train_ratio: Fraction of data for training (default: 0.70).
+        val_ratio: Fraction of data for validation (default: 0.10).
+        test_ratio: Fraction of data for testing (default: 0.20).
+
+    Returns:
+        Tuple of (train_data, val_data, test_data, split_info).
+        split_info contains indices and dates for each split.
+
+    Example:
+        train_ratio=0.70, val_ratio=0.10, test_ratio=0.20 gives:
+        - Train: First 70% of data
+        - Val: Next 10% of data
+        - Test: Final 20% of data
+    """
+    # Validate ratios
+    total_ratio = train_ratio + val_ratio + test_ratio
+    if abs(total_ratio - 1.0) > 1e-6:
+        raise ValueError(f"Ratios must sum to 1.0, got {total_ratio}")
+
+    n = len(data)
+    train_end = int(n * train_ratio)
+    val_end = int(n * (train_ratio + val_ratio))
+
+    # Split data using indices
+    train_data = data[:train_end]
+    val_data = data[train_end:val_end]
+    test_data = data[val_end:]
+
+    # Return split info for debugging/verification
+    split_info = {
+        'train_dates': dates[:train_end],
+        'val_dates': dates[train_end:val_end],
+        'test_dates': dates[val_end:],
+        'train_size': len(train_data),
+        'val_size': len(val_data),
+        'test_size': len(test_data),
+        'train_ratio_actual': len(train_data) / n,
+        'val_ratio_actual': len(val_data) / n,
+        'test_ratio_actual': len(test_data) / n
+    }
+
+    return train_data, val_data, test_data, split_info
+
+
 def encode_quaternion(ohlc: torch.Tensor) -> torch.Tensor:
     """
     Encode OHLC data as quaternions.
@@ -140,6 +197,61 @@ def preprocess_data(
     # Step 1: Temporal split (on RAW data, before normalization!)
     train_raw, val_raw, test_raw, split_info = temporal_split(
         data, dates, train_end_year, val_end_year
+    )
+
+    # Step 2: Compute normalization stats from TRAIN ONLY
+    _, norm_stats = normalize_data(train_raw)
+
+    # Step 3: Apply normalization using train stats to all splits
+    train_norm, _ = normalize_data(train_raw, stats=norm_stats)
+    val_norm, _ = normalize_data(val_raw, stats=norm_stats)
+    test_norm, _ = normalize_data(test_raw, stats=norm_stats)
+
+    # Step 4: Quaternion encoding (semantic transformation)
+    train_quat = encode_quaternion(train_norm)
+    val_quat = encode_quaternion(val_norm)
+    test_quat = encode_quaternion(test_norm)
+
+    return {
+        'train_data': train_quat,
+        'val_data': val_quat,
+        'test_data': test_quat,
+        'norm_stats': norm_stats,
+        'split_info': split_info
+    }
+
+
+def preprocess_data_ratio(
+    data: torch.Tensor,
+    dates: pd.DatetimeIndex,
+    train_ratio: float = 0.70,
+    val_ratio: float = 0.10,
+    test_ratio: float = 0.20
+) -> Dict:
+    """
+    Complete preprocessing pipeline with ratio-based splitting: split, normalize, encode.
+
+    CRITICAL: Normalization statistics are computed from training data ONLY
+    to prevent look-ahead bias.
+
+    Args:
+        data: Raw OHLC tensor of shape (num_samples, 4).
+        dates: DatetimeIndex corresponding to data rows.
+        train_ratio: Fraction of data for training (default: 0.70).
+        val_ratio: Fraction of data for validation (default: 0.10).
+        test_ratio: Fraction of data for testing (default: 0.20).
+
+    Returns:
+        Dictionary containing:
+        - train_data: Normalized quaternion-encoded training data
+        - val_data: Normalized quaternion-encoded validation data
+        - test_data: Normalized quaternion-encoded test data
+        - norm_stats: Normalization statistics (from train only)
+        - split_info: Split boundary information
+    """
+    # Step 1: Temporal split by ratio (on RAW data, before normalization!)
+    train_raw, val_raw, test_raw, split_info = temporal_split_ratio(
+        data, dates, train_ratio, val_ratio, test_ratio
     )
 
     # Step 2: Compute normalization stats from TRAIN ONLY

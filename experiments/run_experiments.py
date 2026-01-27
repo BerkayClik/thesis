@@ -21,7 +21,7 @@ from scipy import stats
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.data.loader import load_sp500_data, dataframe_to_tensor
-from src.data.preprocessing import preprocess_data
+from src.data.preprocessing import preprocess_data, preprocess_data_ratio
 from src.data.dataset import SP500Dataset
 from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel
 from src.models.qnn_attention_model import QuaternionLSTMNoAttention
@@ -464,19 +464,42 @@ def run_experiment(
         ticker=config['data']['ticker'],
         start_date=config['data']['start_date'],
         end_date=config['data']['end_date'],
-        cache_dir=config['data'].get('cache_dir', 'data/cache')
+        cache_dir=config['data'].get('cache_dir', 'data/cache'),
+        interval=config['data'].get('interval', '1d')
     )
+
+    if verbose:
+        print(f"  Loaded {len(df)} data points ({config['data'].get('interval', '1d')} interval)")
 
     # Convert to tensor with dates
     data, dates = dataframe_to_tensor(df)
 
-    # Preprocess data
-    processed = preprocess_data(
-        data,
-        dates=dates,
-        train_end_year=config['data']['train_end_year'],
-        val_end_year=config['data']['val_end_year']
-    )
+    # Preprocess data - use ratio-based or year-based splitting
+    if 'train_ratio' in config['data']:
+        # Ratio-based splitting (for hourly data)
+        processed = preprocess_data_ratio(
+            data,
+            dates=dates,
+            train_ratio=config['data']['train_ratio'],
+            val_ratio=config['data']['val_ratio'],
+            test_ratio=config['data']['test_ratio']
+        )
+        if verbose:
+            split_info = processed['split_info']
+            print(f"  Split (ratio-based): Train={split_info['train_size']}, "
+                  f"Val={split_info['val_size']}, Test={split_info['test_size']}")
+    else:
+        # Year-based splitting (for daily data)
+        processed = preprocess_data(
+            data,
+            dates=dates,
+            train_end_year=config['data']['train_end_year'],
+            val_end_year=config['data']['val_end_year']
+        )
+        if verbose:
+            split_info = processed['split_info']
+            print(f"  Split (year-based): Train={split_info['train_size']}, "
+                  f"Val={split_info['val_size']}, Test={split_info['test_size']}")
     train_data = processed['train_data']
     val_data = processed['val_data']
     test_data = processed['test_data']
