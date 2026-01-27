@@ -393,6 +393,34 @@ Output: (batch, 1)
 
 The Hamilton product mixes all 4 OHLC values in a structured way. Instead of treating O, H, L, C as independent features, the model processes them as a single mathematical object where the relationships are preserved.
 
+### Design Decision: Element-wise Activation Functions
+
+In standard LSTM, sigmoid and tanh are applied element-wise to gate values. For quaternion LSTMs, there are two main approaches:
+
+**Option A: Pure Quaternion Activations**
+- Use quaternion-specific activation (e.g., split activation, quaternion exponential)
+- Mathematically principled but complex to implement and train
+
+**Option B: Element-wise Activations (Our Approach)**
+- Apply sigmoid/tanh independently to each quaternion component (r, i, j, k)
+- Simpler implementation, proven effective in practice
+
+**Why We Chose Option B:**
+
+1. **Literature Support:** Gaudet & Maida (2018) and Parcollet et al. (2019) successfully use element-wise activations in quaternion networks for speech and image tasks.
+
+2. **Gating Semantics:** For LSTM gates, we need values in [0,1] (sigmoid) or [-1,1] (tanh) for multiplicative control. Element-wise application preserves this bounded range for each component.
+
+3. **Training Stability:** Pure quaternion activations can cause gradient issues. Element-wise operations have well-understood gradient flow.
+
+4. **Empirical Success:** This approach works well in our experiments without the complexity of quaternion-specific activations.
+
+**Important Note:** This means our "quaternion gating" is not mathematically equivalent to pure quaternion operations. The key quaternion benefit comes from the Hamilton product in state updates (c_new, h_new), not from the activation functions.
+
+**References:**
+- Gaudet, C. & Maida, A. (2018). Deep Quaternion Networks. IJCNN.
+- Parcollet, T. et al. (2019). Quaternion Recurrent Neural Networks. ICLR.
+
 ---
 
 ## Model 4: Quaternion LSTM + Attention

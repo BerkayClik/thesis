@@ -112,7 +112,7 @@ class NaiveBaseline(torch.nn.Module):
 
     def forward(self, x):
         # Return the last close price in the window (persistence model)
-        return x[:, -1, 3]  # Last close in window
+        return x[:, -1, 3:4]  # Last close in window, shape (batch, 1) for consistency
 
 
 def create_model(model_type: str, hidden_size: int, num_layers: int, dropout: float = 0.0):
