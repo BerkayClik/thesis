@@ -62,8 +62,10 @@ class QuaternionLSTMCell(nn.Module):
         self.W_input = QuaternionLinear(input_size, 4 * hidden_size)
         self.W_hidden = QuaternionLinear(hidden_size, 4 * hidden_size)
 
-        # Note: Using quaternion_normalize() instead of LayerNorm for gradient stability
-        # LayerNorm destroys quaternion structure; unit quaternion normalization preserves it
+        # Learned scale for cell state: normalize direction but learn magnitude.
+        # This prevents gradient explosion (direction is unit norm) while
+        # preserving information capacity (magnitude is learned).
+        self.cell_scale = nn.Parameter(torch.ones(1))
 
         # Initialize forget gate bias to +1.0 for better gradient flow
         # (per Jozefowicz et al. 2015 "An Empirical Exploration of RNN Architectures")
@@ -134,7 +136,8 @@ class QuaternionLSTMCell(nn.Module):
         # New cell state: c_new = f * c + i * g
         # Using Hamilton product for quaternion multiplication
         c_new = hamilton_product(f, c) + hamilton_product(i, g)
-        c_new = quaternion_normalize(c_new)
+        # Normalize direction, scale by learned magnitude
+        c_new = self.cell_scale * quaternion_normalize(c_new)
 
         # New hidden state: h_new = o * tanh(c_new)
         h_new = hamilton_product(o, torch.tanh(c_new))
@@ -177,7 +180,7 @@ class QuaternionLSTMCell(nn.Module):
 
         # New cell state: c_new = f * c + i * g
         c_new = hamilton_product(f, c) + hamilton_product(i, g)
-        c_new = quaternion_normalize(c_new)
+        c_new = self.cell_scale * quaternion_normalize(c_new)
 
         # New hidden state: h_new = o * tanh(c_new)
         h_new = hamilton_product(o, torch.tanh(c_new))
