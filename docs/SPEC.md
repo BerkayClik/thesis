@@ -61,8 +61,7 @@ Primary:
 - Directional Accuracy
 
 Secondary:
-- MAE
-- MSE
+- MAPE
 
 ---
 

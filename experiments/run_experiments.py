@@ -28,7 +28,7 @@ from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel
 from src.models.qnn_attention_model import QuaternionLSTMNoAttention
 from src.training.trainer import Trainer
 from src.training.losses import mse_loss
-from src.evaluation.metrics import compute_mae, compute_mse, compute_mape
+from src.evaluation.metrics import compute_mape
 from src.evaluation.directional_accuracy import compute_directional_accuracy
 from src.evaluation.sharpe_ratio import compute_sharpe_ratio
 
@@ -190,7 +190,7 @@ def compute_statistical_significance(
         return {}
 
     significance_results = {}
-    metrics = ['mae', 'mse', 'mape', 'directional_accuracy', 'sharpe_ratio']
+    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio']
 
     # Get baseline values
     baseline_runs = results[baseline_model]['individual_runs']
@@ -248,7 +248,7 @@ def evaluate_model(
     """
     Evaluate model on a dataset.
 
-    Returns dict with MAE, MSE, MAPE, directional accuracy, and Sharpe ratio.
+    Returns dict with MAPE, directional accuracy, and Sharpe ratio.
     All metrics are computed on denormalized (original scale) prices.
 
     Args:
@@ -286,8 +286,6 @@ def evaluate_model(
     prevs_denorm = denormalize(prevs, norm_stats, col=3)
 
     return {
-        'mae': compute_mae(preds_denorm, targets_denorm),
-        'mse': compute_mse(preds_denorm, targets_denorm),
         'mape': compute_mape(preds_denorm, targets_denorm),
         'directional_accuracy': compute_directional_accuracy(
             preds_denorm, targets_denorm, prevs_denorm
@@ -574,8 +572,6 @@ def run_experiment(
             variant_results.append(result)
 
         # Aggregate results
-        test_maes = [r['test_metrics']['mae'] for r in variant_results]
-        test_mses = [r['test_metrics']['mse'] for r in variant_results]
         test_mapes = [r['test_metrics']['mape'] for r in variant_results]
         test_das = [r['test_metrics']['directional_accuracy'] for r in variant_results]
         test_sharpes = [r['test_metrics']['sharpe_ratio'] for r in variant_results]
@@ -583,8 +579,6 @@ def run_experiment(
         all_results[variant_name] = {
             'individual_runs': variant_results,
             'aggregated': {
-                'mae': {'mean': np.mean(test_maes), 'std': np.std(test_maes)},
-                'mse': {'mean': np.mean(test_mses), 'std': np.std(test_mses)},
                 'mape': {'mean': np.mean(test_mapes), 'std': np.std(test_mapes)},
                 'directional_accuracy': {'mean': np.mean(test_das), 'std': np.std(test_das)},
                 'sharpe_ratio': {'mean': np.mean(test_sharpes), 'std': np.std(test_sharpes)}
@@ -597,8 +591,6 @@ def run_experiment(
 
         if verbose:
             print(f"  Results (mean ± std over {len(seeds)} seeds):")
-            print(f"    MAE: {np.mean(test_maes):.4f} ± {np.std(test_maes):.4f}")
-            print(f"    MSE: {np.mean(test_mses):.4f} ± {np.std(test_mses):.4f}")
             print(f"    MAPE: {np.mean(test_mapes):.2f}% ± {np.std(test_mapes):.2f}%")
             print(f"    Dir Acc: {np.mean(test_das):.2f}% ± {np.std(test_das):.2f}%")
             print(f"    Sharpe: {np.mean(test_sharpes):.3f} ± {np.std(test_sharpes):.3f}")
@@ -617,41 +609,39 @@ def print_results_table(results: Dict):
     model_results = results.get('model_results', results)
     significance = results.get('statistical_significance', {})
 
-    print("\n" + "=" * 100)
+    print("\n" + "=" * 80)
     print("EXPERIMENT RESULTS")
-    print("=" * 100)
+    print("=" * 80)
 
     # Header
-    print(f"{'Model':<30} {'MAE':<16} {'MSE':<16} {'MAPE (%)':<14} {'Dir Acc (%)':<14} {'Sharpe':<10}")
-    print("-" * 100)
+    print(f"{'Model':<30} {'MAPE (%)':<18} {'Dir Acc (%)':<18} {'Sharpe':<14}")
+    print("-" * 80)
 
     # Rows
     for model_name, model_data in model_results.items():
         agg = model_data['aggregated']
-        mae_str = f"{agg['mae']['mean']:.2f} ± {agg['mae']['std']:.2f}"
-        mse_str = f"{agg['mse']['mean']:.2f} ± {agg['mse']['std']:.2f}"
         mape_str = f"{agg['mape']['mean']:.2f} ± {agg['mape']['std']:.2f}"
         da_str = f"{agg['directional_accuracy']['mean']:.2f} ± {agg['directional_accuracy']['std']:.2f}"
         sharpe_str = f"{agg['sharpe_ratio']['mean']:.3f} ± {agg['sharpe_ratio']['std']:.3f}"
-        print(f"{model_name:<30} {mae_str:<16} {mse_str:<16} {mape_str:<14} {da_str:<14} {sharpe_str:<10}")
+        print(f"{model_name:<30} {mape_str:<18} {da_str:<18} {sharpe_str:<14}")
 
-    print("=" * 100)
+    print("=" * 80)
 
     # Print statistical significance if available
     if significance:
         print("\nSTATISTICAL SIGNIFICANCE (vs real_lstm baseline)")
-        print("-" * 100)
+        print("-" * 80)
         print(f"{'Model':<35} {'Metric':<24} {'p-value':<12} {'Cohens d':<12} {'Significant':<12}")
-        print("-" * 100)
+        print("-" * 80)
 
         for model_name, metrics in significance.items():
             for metric, stats in metrics.items():
                 sig_marker = "**" if stats['significant_0.01'] else ("*" if stats['significant_0.05'] else "")
                 print(f"{model_name:<35} {metric:<24} {stats['p_value']:<12.4f} {stats['cohens_d']:<12.3f} {sig_marker:<12}")
 
-        print("-" * 100)
+        print("-" * 80)
         print("* p < 0.05, ** p < 0.01")
-        print("=" * 100)
+        print("=" * 80)
 
 
 def convert_to_serializable(obj):

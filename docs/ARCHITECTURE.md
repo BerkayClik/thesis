@@ -873,8 +873,7 @@ After training completes, the **best checkpoint** is loaded and evaluated on the
 │     └── predictions = model(test_data)                     │
 │                                                            │
 │  4. Compute evaluation metrics:                            │
-│     ├── MAE (Mean Absolute Error)                          │
-│     ├── MSE (Mean Squared Error)                           │
+│     ├── MAPE (Mean Absolute Percentage Error)              │
 │     ├── Directional Accuracy                               │
 │     └── Sharpe Ratio                                       │
 │                                                            │
@@ -885,8 +884,7 @@ After training completes, the **best checkpoint** is loaded and evaluated on the
 
 | Metric | Formula | Interpretation |
 |--------|---------|----------------|
-| MAE | `mean(\|pred - target\|)` | Average prediction error magnitude |
-| MSE | `mean((pred - target)²)` | Penalizes large errors more heavily |
+| MAPE | `mean(\|target - pred\| / \|target\|) × 100` | Scale-independent percentage error |
 | Directional Accuracy | `% where sign(pred - prev) == sign(target - prev)` | Did we predict up/down correctly? |
 | Sharpe Ratio | `mean(strategy_returns) / std(strategy_returns)` | Risk-adjusted trading performance |
 
@@ -987,7 +985,7 @@ sharpe = mean(strategy_returns) / std(strategy_returns)
             │       Test Evaluation        │
             │  ─────────────────────────── │
             │  • Forward pass on test set  │
-            │  • Compute MAE, MSE          │
+            │  • Compute MAPE              │
             │  • Compute Dir. Accuracy     │
             │  • Compute Sharpe Ratio      │
             └──────────────┬───────────────┘
@@ -1011,11 +1009,11 @@ For statistical validity, each model variant is trained with multiple random see
 
 ```
 Variant: quaternion_lstm_attention
-├── Seed 42  → test_mae=0.0234, dir_acc=54.2%
-├── Seed 123 → test_mae=0.0241, dir_acc=53.8%
-└── Seed 456 → test_mae=0.0228, dir_acc=55.1%
+├── Seed 42  → test_mape=2.34%, dir_acc=54.2%
+├── Seed 123 → test_mape=2.41%, dir_acc=53.8%
+└── Seed 456 → test_mape=2.28%, dir_acc=55.1%
     ────────────────────────────────────
-    Mean ± Std: MAE=0.0234±0.0005, Dir=54.4±0.5%
+    Mean ± Std: MAPE=2.34±0.05%, Dir=54.4±0.5%
 ```
 
 Statistical significance is computed using:

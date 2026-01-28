@@ -45,7 +45,7 @@
 
 ## Phase 6 – Evaluation
 - Directional accuracy
-- MAE / MSE
+- MAPE
 - Rolling-window validation
 
 ---

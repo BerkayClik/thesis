@@ -67,8 +67,8 @@ def get_metric_stats(model_data: Dict, metric: str) -> tuple:
     Get mean and std for a metric, handling different JSON structures.
 
     Supports both:
-    - Flat: model_data['mae_mean'], model_data['mae_std']
-    - Nested: model_data['aggregated']['mae']['mean'], model_data['aggregated']['mae']['std']
+    - Flat: model_data['mape_mean'], model_data['mape_std']
+    - Nested: model_data['aggregated']['mape']['mean'], model_data['aggregated']['mape']['std']
     """
     # Try nested structure first (aggregated)
     if 'aggregated' in model_data:
@@ -124,7 +124,7 @@ def plot_training_curves(results: Dict, output_dir: str, figsize=(14, 10)):
                    label=f'Val (seed={seed})')
 
         ax.set_xlabel('Epoch')
-        ax.set_ylabel('Loss (MSE)')
+        ax.set_ylabel('Loss')
         ax.set_title(DISPLAY_NAMES.get(model_name, model_name))
         ax.legend(fontsize=8)
         ax.set_yscale('log')  # Log scale often better for loss
@@ -149,15 +149,14 @@ def plot_metric_comparison(results: Dict, output_dir: str, figsize=(14, 10)):
     """
     model_results = results.get('model_results', results)
 
-    metrics = ['mae', 'mse', 'directional_accuracy', 'sharpe_ratio']
+    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio']
     metric_labels = {
-        'mae': 'MAE (Lower is Better)',
-        'mse': 'MSE (Lower is Better)',
+        'mape': 'MAPE % (Lower is Better)',
         'directional_accuracy': 'Directional Accuracy % (Higher is Better)',
         'sharpe_ratio': 'Sharpe Ratio (Higher is Better)'
     }
 
-    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
     axes = axes.flatten()
 
     models = list(model_results.keys())
@@ -314,9 +313,9 @@ def plot_predictions_all_models(results: Dict, output_dir: str,
         ax.plot(time_idx, predictions, label='Predicted', color='#ff7f0e', alpha=0.7, linewidth=1)
 
         # Add metrics to title
-        mae = test_metrics['mae']
+        mape = test_metrics['mape']
         da = test_metrics['directional_accuracy']
-        ax.set_title(f'{DISPLAY_NAMES.get(model_name, model_name)}\nMAE: {mae:.4f}, DA: {da:.1f}%')
+        ax.set_title(f'{DISPLAY_NAMES.get(model_name, model_name)}\nMAPE: {mape:.2f}%, DA: {da:.1f}%')
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
 
@@ -340,15 +339,14 @@ def plot_box_plots(results: Dict, output_dir: str, figsize=(14, 10)):
     """
     model_results = results.get('model_results', results)
 
-    metrics = ['mae', 'mse', 'directional_accuracy', 'sharpe_ratio']
+    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio']
     metric_labels = {
-        'mae': 'MAE',
-        'mse': 'MSE',
+        'mape': 'MAPE (%)',
         'directional_accuracy': 'Directional Accuracy (%)',
         'sharpe_ratio': 'Sharpe Ratio'
     }
 
-    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    fig, axes = plt.subplots(1, 3, figsize=figsize)
     axes = axes.flatten()
 
     models = list(model_results.keys())
@@ -397,7 +395,7 @@ def plot_significance_heatmap(results: Dict, output_dir: str, figsize=(10, 8)):
         print("No statistical significance data found.")
         return
 
-    metrics = ['mae', 'mse', 'directional_accuracy', 'sharpe_ratio']
+    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio']
     models = list(significance.keys())
 
     # Create p-value matrix
@@ -452,7 +450,7 @@ def plot_parameter_efficiency(results: Dict, output_dir: str, figsize=(10, 6)):
 
     fig, axes = plt.subplots(1, 2, figsize=figsize)
 
-    metrics = [('mae', 'MAE (Lower is Better)'),
+    metrics = [('mape', 'MAPE % (Lower is Better)'),
                ('directional_accuracy', 'Directional Accuracy % (Higher is Better)')]
 
     for ax, (metric, label) in zip(axes, metrics):
@@ -493,8 +491,8 @@ def plot_radar_chart(results: Dict, output_dir: str, figsize=(10, 10)):
     """
     model_results = results.get('model_results', results)
 
-    metrics = ['mae', 'mse', 'directional_accuracy', 'sharpe_ratio']
-    metric_labels = ['MAE', 'MSE', 'Dir. Acc.', 'Sharpe']
+    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio']
+    metric_labels = ['MAPE', 'Dir. Acc.', 'Sharpe']
 
     # Normalize metrics to 0-1 scale (inverted for lower-is-better metrics)
     all_values = {metric: [] for metric in metrics}
@@ -515,7 +513,7 @@ def plot_radar_chart(results: Dict, output_dir: str, figsize=(10, 10)):
             return 0.5
         normalized = (value - min_val) / (max_val - min_val)
         # Invert for lower-is-better metrics
-        if metric in ['mae', 'mse']:
+        if metric in ['mape']:
             normalized = 1 - normalized
         return normalized
 

@@ -48,8 +48,6 @@ training:
 # Evaluation settings
 evaluation:
   metrics:
-    - mae
-    - mse
     - mape
     - directional_accuracy
     - sharpe_ratio
