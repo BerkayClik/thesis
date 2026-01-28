@@ -125,10 +125,7 @@ class QuaternionLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Einsum-based forward pass - avoids intermediate tensor creation.
-
-        Fuses Hamilton product and sum reduction into efficient einsum operations,
-        providing 2-3x speedup over the naive broadcasting approach.
+        Forward pass using Hamilton product.
 
         Args:
             x: Input of shape (batch, in_features, 4).
@@ -140,38 +137,10 @@ class QuaternionLinear(nn.Module):
         assert x.shape[1] == self.in_features, f"Expected {self.in_features} input features, got {x.shape[1]}"
         assert x.shape[2] == 4, f"Expected quaternion dim 4, got {x.shape[2]}"
 
-        # Component extraction
-        x_a = x[..., 0]  # (batch, in_features)
-        x_b = x[..., 1]
-        x_c = x[..., 2]
-        x_d = x[..., 3]
-
-        w_a = self.weight[..., 0]  # (out_features, in_features)
-        w_b = self.weight[..., 1]
-        w_c = self.weight[..., 2]
-        w_d = self.weight[..., 3]
-
-        # Fused einsum: Hamilton product + sum over in_features
-        # out_r = Σ(x_a*w_a - x_b*w_b - x_c*w_c - x_d*w_d)
-        out_r = (torch.einsum('bi,oi->bo', x_a, w_a) -
-                 torch.einsum('bi,oi->bo', x_b, w_b) -
-                 torch.einsum('bi,oi->bo', x_c, w_c) -
-                 torch.einsum('bi,oi->bo', x_d, w_d))
-
-        out_i = (torch.einsum('bi,oi->bo', x_a, w_b) +
-                 torch.einsum('bi,oi->bo', x_b, w_a) +
-                 torch.einsum('bi,oi->bo', x_c, w_d) -
-                 torch.einsum('bi,oi->bo', x_d, w_c))
-
-        out_j = (torch.einsum('bi,oi->bo', x_a, w_c) -
-                 torch.einsum('bi,oi->bo', x_b, w_d) +
-                 torch.einsum('bi,oi->bo', x_c, w_a) +
-                 torch.einsum('bi,oi->bo', x_d, w_b))
-
-        out_k = (torch.einsum('bi,oi->bo', x_a, w_d) +
-                 torch.einsum('bi,oi->bo', x_b, w_c) -
-                 torch.einsum('bi,oi->bo', x_c, w_b) +
-                 torch.einsum('bi,oi->bo', x_d, w_a))
-
-        output = torch.stack([out_r, out_i, out_j, out_k], dim=-1)
-        return output + self.bias.unsqueeze(0)
+        # x: (batch, in_features, 4), weight: (out_features, in_features, 4)
+        # Use broadcasting to compute all hamilton products at once
+        x_expanded = x.unsqueeze(1)  # (batch, 1, in_features, 4)
+        w_expanded = self.weight.unsqueeze(0)  # (1, out_features, in_features, 4)
+        products = hamilton_product(x_expanded, w_expanded)  # (batch, out_features, in_features, 4)
+        output = products.sum(dim=2) + self.bias  # (batch, out_features, 4)
+        return output

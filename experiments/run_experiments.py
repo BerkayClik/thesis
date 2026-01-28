@@ -333,13 +333,13 @@ def run_single_experiment(
     )
 
     # Compile model for faster execution (PyTorch 2.0+)
-    # Skip torch.compile for MPS: Metal shader buffer limits can be exceeded
-    # Quaternion models now support torch.compile after optimization:
-    # - Compile-friendly hamilton_product (slice indexing, cat instead of stack)
-    # - Pre-computed input projections reduce graph complexity
+    # Skip torch.compile for:
+    # - MPS: Metal shader buffer limits can be exceeded
+    # - Quaternion models: sequential time loop causes excessive recompilation
     should_compile = (
         hasattr(torch, 'compile')
         and device.type != 'mps'
+        and 'quaternion' not in model_config['type']
     )
     if should_compile:
         try:
