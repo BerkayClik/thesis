@@ -343,9 +343,9 @@ def run_single_experiment(
     )
     if should_compile:
         try:
-            model = torch.compile(model, mode='reduce-overhead')
+            model = torch.compile(model)
             if verbose:
-                print(f"    Model compiled with torch.compile (mode=reduce-overhead)")
+                print(f"    Model compiled with torch.compile")
         except Exception as e:
             if verbose:
                 print(f"    torch.compile failed, using eager mode: {e}")
