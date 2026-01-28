@@ -16,7 +16,7 @@ A technical guide for CS students explaining the neural network architectures in
 8. [Model 4: Quaternion LSTM + Attention](#model-4-quaternion-lstm--attention)
 9. [Comparison Summary](#comparison-summary)
    - [4 Model Architectures](#4-model-architectures)
-   - [6 Experimental Variants](#6-experimental-variants)
+   - [7 Experimental Variants](#7-experimental-variants)
    - [Parameter Count Comparison](#parameter-count-comparison)
 10. [Data Flow Diagram](#data-flow-diagram-complete)
 11. [Training, Validation, and Testing](#training-validation-and-testing)
@@ -359,18 +359,27 @@ class QuaternionLSTMCell(nn.Module):
         self.W_hi = QuaternionLinear(hidden_size, hidden_size)
         # ... (forget, cell, output gates similar)
 
+        # LayerNorm for training stability
+        self.cell_norm = nn.LayerNorm(4)
+        self.hidden_norm = nn.LayerNorm(4)
+        self.gate_norm_i = nn.LayerNorm(4)  # Per-gate normalization
+        # ... (gate_norm_f, gate_norm_g, gate_norm_o similar)
+
     def forward(self, x, hx):
         h, c = hx  # Both are quaternions: (batch, hidden, 4)
 
-        # Gates (same formulas, quaternion operations)
-        i = sigmoid(self.W_ii(x) + self.W_hi(h))  # input gate
-        f = sigmoid(self.W_if(x) + self.W_hf(h))  # forget gate
-        g = tanh(self.W_ig(x) + self.W_hg(h))     # cell candidate
-        o = sigmoid(self.W_io(x) + self.W_ho(h))  # output gate
+        # Gates with pre-activation normalization
+        i = sigmoid(gate_norm_i(self.W_ii(x) + self.W_hi(h)))  # input gate
+        f = sigmoid(gate_norm_f(self.W_if(x) + self.W_hf(h)))  # forget gate
+        g = tanh(gate_norm_g(self.W_ig(x) + self.W_hg(h)))     # cell candidate
+        o = sigmoid(gate_norm_o(self.W_io(x) + self.W_ho(h)))  # output gate
 
-        # State updates use Hamilton product instead of *
+        # State updates use Hamilton product + LayerNorm
         c_new = hamilton_product(f, c) + hamilton_product(i, g)
+        c_new = self.cell_norm(c_new)
+
         h_new = hamilton_product(o, tanh(c_new))
+        h_new = self.hidden_norm(h_new)
 
         return h_new, c_new
 ```
@@ -437,6 +446,32 @@ In standard LSTM, sigmoid and tanh are applied element-wise to gate values. For 
 - Gaudet, C. & Maida, A. (2018). Deep Quaternion Networks. IJCNN.
 - Parcollet, T. et al. (2019). Quaternion Recurrent Neural Networks. ICLR.
 
+### Training Stability Features
+
+The Quaternion LSTM includes several features for stable training:
+
+**1. LayerNorm on Gates and States:**
+- Pre-activation normalization on each gate prevents magnitude explosion from Hamilton product
+- Post-update normalization on cell state (c) and hidden state (h)
+
+```python
+# Gate normalization before activation
+i = sigmoid(gate_norm_i(W_ii(x) + W_hi(h)))
+
+# State normalization after update
+c_new = cell_norm(hamilton_product(f, c) + hamilton_product(i, g))
+h_new = hidden_norm(hamilton_product(o, tanh(c_new)))
+```
+
+**2. Forget Gate Bias Initialization:**
+- Forget gate bias initialized to +1.0 (per Jozefowicz et al. 2015)
+- Biases sigmoid toward 1, keeping cell state information initially
+- Helps with learning long-term dependencies
+
+**3. Xavier-like Weight Initialization:**
+- Quaternion weights use adapted Xavier uniform initialization
+- Accounts for 4D quaternion structure in fan calculation
+
 ---
 
 ## Model 4: Quaternion LSTM + Attention
@@ -482,8 +517,7 @@ Input: (batch, 20, 4)
            │
            ▼
     ┌──────────────┐
-    │   MLP Head   │  hidden → hidden/2 → 1
-    │   (2 layers) │  with ReLU activation
+    │ Linear Head  │  hidden → 1
     └──────┬───────┘
            │
            ▼
@@ -508,12 +542,8 @@ class QNNAttentionModel(nn.Module):
         # Attention in real space
         self.attention = TemporalAttention(hidden_size)
 
-        # Output MLP
-        self.output_head = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.ReLU(),
-            nn.Linear(hidden_size // 2, 1)
-        )
+        # Single linear output (matches Real LSTM simplicity)
+        self.output_head = nn.Linear(hidden_size, 1)
 
     def forward(self, x):
         # Quaternion encoding
@@ -588,46 +618,16 @@ Quaternion models have more parameters because each weight is 4D instead of 1D.
 
 ---
 
-### ⚠️ IMPORTANT: Architectural Differences Note (Discuss with Advisor)
-
-> **NOTE FOR THESIS REVIEW:** The following architectural differences exist between Real and Quaternion models. These should be discussed with your advisor before final submission.
-
-#### Output Head Differences
-
-| Model Type | Output Head Architecture | Extra Layers |
-|------------|-------------------------|--------------|
-| **Real LSTM** | `Linear(hidden → 1)` | None |
-| **Real LSTM + Attention** | `Linear(hidden → 1)` | None |
-| **Quaternion LSTM** | `Linear(hidden → hidden//2) → ReLU → Linear(hidden//2 → 1)` | 2-layer MLP |
-| **Quaternion LSTM + Attention** | `Linear(hidden → hidden//2) → ReLU → Linear(hidden//2 → 1)` | 2-layer MLP |
-
-#### Projection Layer (Quaternion Only)
+### Architectural Note: Projection Layer
 
 Quaternion models include an additional projection layer that Real models don't have:
 
 ```
-Quaternion: QLSTM → Flatten(hidden*4) → Projection(hidden*4 → hidden) → Output Head
-Real:       LSTM  → Last timestep(hidden) → Output Head
+Quaternion: QLSTM → Flatten(hidden*4) → Projection(hidden*4 → hidden) → Linear(hidden → 1)
+Real:       LSTM  → Last timestep(hidden) → Linear(hidden → 1)
 ```
 
-#### Implications for Fair Comparison
-
-1. **Quaternion models have more expressive output capacity** due to 2-layer MLP vs single Linear layer
-2. **Projection layer adds extra transformation** before output head
-3. **If Quaternion outperforms Real**, it could be due to:
-   - Hamilton product capturing OHLC correlations (thesis hypothesis)
-   - Extra non-linearity from 2-layer MLP head
-   - Additional capacity from projection layer
-
-#### Potential Resolutions (Discuss with Advisor)
-
-| Option | Change | Effect |
-|--------|--------|--------|
-| A | Add 2-layer MLP to Real models | Isolates Hamilton product effect |
-| B | Use single Linear in Quaternion models | Simpler, but may hurt Quaternion performance |
-| C | Document as limitation | Acknowledge in thesis limitations section |
-
-**Recommendation:** If the goal is to prove Hamilton product's benefit, Option A provides the strongest evidence ("same architecture, only encoding differs").
+**Output Head:** Both Real and Quaternion models use the same single `Linear(hidden → 1)` output layer. The projection layer in Quaternion models transforms the flattened quaternion output (hidden*4) back to real space (hidden) before the output head.
 
 ### What We're Testing
 
@@ -644,7 +644,7 @@ The research question: **Does quaternion encoding help predict stock prices?**
 ## Data Flow Diagram (Complete)
 
 ```
-Raw OHLC Data (2015-2024)
+Raw OHLC Data (2010-2024)
          │
          ▼
 ┌─────────────────────────────┐
@@ -718,18 +718,18 @@ This section explains the complete training pipeline from data splitting to fina
 We use **temporal splitting** to prevent look-ahead bias - a critical requirement for financial time series:
 
 ```
-Timeline: 2015 ─────────────────────────────────────────────► 2024
+Timeline: 2010 ─────────────────────────────────────────────► 2024
 
           │◄────── TRAIN ──────►│◄─ VAL ─►│◄──── TEST ────►│
-          │      2015-2021      │  2022   │   2023-2024    │
-          │       7 years       │ 1 year  │    2 years     │
+          │      2010-2021      │  2022   │   2023-2024    │
+          │       12 years      │ 1 year  │    2 years     │
 ```
 
 **Key Implementation Details:**
 
 | Split | Years | Purpose | Normalization |
 |-------|-------|---------|---------------|
-| Train | 2015-2021 | Model learning | Stats computed here |
+| Train | 2010-2021 | Model learning | Stats computed here |
 | Validation | 2022 | Early stopping & hyperparameter tuning | Uses train stats |
 | Test | 2023-2024 | Final unbiased evaluation | Uses train stats |
 
