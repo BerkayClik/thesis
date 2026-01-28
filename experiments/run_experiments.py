@@ -331,13 +331,10 @@ def run_single_experiment(
     )
 
     # Compile model for faster execution (PyTorch 2.0+)
-    # Skip torch.compile for:
-    # - MPS: Metal shader buffer limits can be exceeded
-    # - Quaternion models: sequential time loop causes excessive recompilation
+    # Skip torch.compile for MPS: Metal shader buffer limits can be exceeded
     should_compile = (
         hasattr(torch, 'compile')
         and device.type != 'mps'
-        and 'quaternion' not in model_config['type']
     )
     if should_compile:
         try:

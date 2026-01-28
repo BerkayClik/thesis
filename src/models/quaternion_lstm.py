@@ -2,34 +2,15 @@
 Quaternion LSTM module.
 
 Implements LSTM using quaternion operations for gate computations.
-Uses Hamilton product instead of matrix multiplication for processing
-quaternion-encoded features.
+Quaternion structure is used in the weight matrices (QuaternionLinear)
+for parameter-efficient weight sharing via Hamilton product, while
+gating operations use standard element-wise multiplication to preserve
+LSTM's linear memory highway semantics.
 """
 
 import torch
 import torch.nn as nn
-from .quaternion_ops import hamilton_product, QuaternionLinear
-
-
-def quaternion_normalize(q: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
-    """
-    Normalize quaternions to unit norm.
-
-    Unit quaternion normalization is more appropriate than LayerNorm for
-    quaternion representations because:
-    1. It preserves the quaternion structure (rotation representation)
-    2. Hamilton product of unit quaternions stays near unit norm
-    3. Prevents gradient explosion through recurrence
-
-    Args:
-        q: Quaternion tensor of shape (..., 4).
-        eps: Small epsilon for numerical stability.
-
-    Returns:
-        Unit quaternion tensor of shape (..., 4).
-    """
-    norm = torch.norm(q, dim=-1, keepdim=True)
-    return q / (norm + eps)
+from .quaternion_ops import QuaternionLinear
 
 
 class QuaternionLSTMCell(nn.Module):
@@ -41,11 +22,12 @@ class QuaternionLSTMCell(nn.Module):
     (one for input, one for hidden) with gates concatenated along the feature dim.
 
     The cell maintains hidden state h and cell state c in quaternion space (4D).
-    Gate computations use Hamilton product instead of matrix multiplication.
+    Quaternion structure is in the weight matrices (QuaternionLinear uses Hamilton
+    product for weight sharing). Gating uses standard element-wise multiplication
+    to preserve the LSTM cell state as a linear memory highway.
 
     Features for training stability:
     - Forget gate bias initialized to +1.0 (per Jozefowicz et al. 2015)
-    - Quaternion normalization (unit norm) for gradient stability
 
     Args:
         input_size: Number of input quaternion features.
@@ -62,18 +44,13 @@ class QuaternionLSTMCell(nn.Module):
         self.W_input = QuaternionLinear(input_size, 4 * hidden_size)
         self.W_hidden = QuaternionLinear(hidden_size, 4 * hidden_size)
 
-        # Learned scale for cell state: normalize direction but learn magnitude.
-        # This prevents gradient explosion (direction is unit norm) while
-        # preserving information capacity (magnitude is learned).
-        self.cell_scale = nn.Parameter(torch.ones(1))
-
         # Initialize forget gate bias to +1.0 for better gradient flow
         # (per Jozefowicz et al. 2015 "An Empirical Exploration of RNN Architectures")
         self._init_forget_gate_bias()
 
     def _init_forget_gate_bias(self):
         """
-        Initialize forget gate bias to +1.0 on REAL COMPONENT ONLY.
+        Initialize forget gate bias to +1.0 on all quaternion components.
 
         Per Jozefowicz et al. 2015, initializing forget gate bias to 1.0
         helps with learning long-term dependencies by keeping the forget
@@ -82,17 +59,14 @@ class QuaternionLSTMCell(nn.Module):
         Gate layout in fused weights: [i, f, g, o] each of size hidden_size
         Forget gate is at index hidden_size:2*hidden_size
 
-        IMPORTANT: Only the real component (index 0) gets +1.0 because:
-        - Identity quaternion = [1, 0, 0, 0]
-        - For forget gate to "remember", f ≈ identity quaternion
-        - Adding +1 to all components would give [~0.73, ~0.73, ~0.73, ~0.73]
-          which is NOT close to identity and breaks the forget mechanism.
+        With element-wise gating, each component is independently gated by
+        sigmoid, so all 4 components need +1.0 to start with forget gate open.
         """
         with torch.no_grad():
-            # Add +1.0 to REAL COMPONENT ONLY of forget gate biases
+            # Add +1.0 to ALL components of forget gate biases
             # Forget gate is the 2nd chunk: index [hidden_size:2*hidden_size]
-            self.W_input.bias.data[self.hidden_size:2*self.hidden_size, 0] += 1.0
-            self.W_hidden.bias.data[self.hidden_size:2*self.hidden_size, 0] += 1.0
+            self.W_input.bias.data[self.hidden_size:2*self.hidden_size] += 1.0
+            self.W_hidden.bias.data[self.hidden_size:2*self.hidden_size] += 1.0
 
     def forward(
         self,
@@ -133,15 +107,10 @@ class QuaternionLSTMCell(nn.Module):
         g = torch.tanh(g_gate)
         o = torch.sigmoid(o_gate)
 
-        # New cell state: c_new = f * c + i * g
-        # Using Hamilton product for quaternion multiplication
-        c_new = hamilton_product(f, c) + hamilton_product(i, g)
-        # Normalize direction, scale by learned magnitude
-        c_new = self.cell_scale * quaternion_normalize(c_new)
-
-        # New hidden state: h_new = o * tanh(c_new)
-        h_new = hamilton_product(o, torch.tanh(c_new))
-        h_new = quaternion_normalize(h_new)
+        # Element-wise gating (standard LSTM semantics)
+        # Quaternion structure is preserved in W_input/W_hidden (QuaternionLinear)
+        c_new = f * c + i * g
+        h_new = o * torch.tanh(c_new)
 
         return h_new, c_new
 
@@ -178,13 +147,9 @@ class QuaternionLSTMCell(nn.Module):
         g = torch.tanh(g_gate)
         o = torch.sigmoid(o_gate)
 
-        # New cell state: c_new = f * c + i * g
-        c_new = hamilton_product(f, c) + hamilton_product(i, g)
-        c_new = self.cell_scale * quaternion_normalize(c_new)
-
-        # New hidden state: h_new = o * tanh(c_new)
-        h_new = hamilton_product(o, torch.tanh(c_new))
-        h_new = quaternion_normalize(h_new)
+        # Element-wise gating (standard LSTM semantics)
+        c_new = f * c + i * g
+        h_new = o * torch.tanh(c_new)
 
         return h_new, c_new
 

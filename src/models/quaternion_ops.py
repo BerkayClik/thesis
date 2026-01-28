@@ -146,16 +146,17 @@ class QuaternionLinear(nn.Module):
 
     def reset_parameters(self):
         """
-        Initialize quaternion weights using Xavier (Glorot) uniform initialization.
+        Initialize quaternion weights using Glorot normal initialization.
 
-        Xavier initialization provides appropriate variance scaling for
-        neural networks, helping to prevent gradient vanishing/explosion.
+        Fan counts use quaternion feature dimensions (not multiplied by 4)
+        because the Hamilton product already couples the 4 components -
+        each quaternion feature contributes to all 4 output components.
         """
-        fan_in = self.in_features * 4
-        fan_out = self.out_features * 4
-        stdv = math.sqrt(6.0 / (fan_in + fan_out))
-        nn.init.uniform_(self.weight, -stdv, stdv)
-        nn.init.uniform_(self.bias, -stdv, stdv)
+        fan_in = self.in_features
+        fan_out = self.out_features
+        stdv = math.sqrt(2.0 / (fan_in + fan_out))
+        nn.init.normal_(self.weight, 0, stdv)
+        nn.init.zeros_(self.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
