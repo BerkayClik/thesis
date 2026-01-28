@@ -11,6 +11,27 @@ import torch.nn as nn
 from .quaternion_ops import hamilton_product, QuaternionLinear
 
 
+def quaternion_normalize(q: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """
+    Normalize quaternions to unit norm.
+
+    Unit quaternion normalization is more appropriate than LayerNorm for
+    quaternion representations because:
+    1. It preserves the quaternion structure (rotation representation)
+    2. Hamilton product of unit quaternions stays near unit norm
+    3. Prevents gradient explosion through recurrence
+
+    Args:
+        q: Quaternion tensor of shape (..., 4).
+        eps: Small epsilon for numerical stability.
+
+    Returns:
+        Unit quaternion tensor of shape (..., 4).
+    """
+    norm = torch.norm(q, dim=-1, keepdim=True)
+    return q / (norm + eps)
+
+
 class QuaternionLSTMCell(nn.Module):
     """
     Fused Quaternion LSTM cell with optimized gate computation.
@@ -24,7 +45,7 @@ class QuaternionLSTMCell(nn.Module):
 
     Features for training stability:
     - Forget gate bias initialized to +1.0 (per Jozefowicz et al. 2015)
-    - LayerNorm applied to cell and hidden states for gradient stability
+    - Quaternion normalization (unit norm) for gradient stability
 
     Args:
         input_size: Number of input quaternion features.
@@ -41,9 +62,8 @@ class QuaternionLSTMCell(nn.Module):
         self.W_input = QuaternionLinear(input_size, 4 * hidden_size)
         self.W_hidden = QuaternionLinear(hidden_size, 4 * hidden_size)
 
-        # LayerNorm for gradient stability
-        self.cell_norm = nn.LayerNorm(4)
-        self.hidden_norm = nn.LayerNorm(4)
+        # Note: Using quaternion_normalize() instead of LayerNorm for gradient stability
+        # LayerNorm destroys quaternion structure; unit quaternion normalization preserves it
 
         # Initialize forget gate bias to +1.0 for better gradient flow
         # (per Jozefowicz et al. 2015 "An Empirical Exploration of RNN Architectures")
@@ -114,11 +134,11 @@ class QuaternionLSTMCell(nn.Module):
         # New cell state: c_new = f * c + i * g
         # Using Hamilton product for quaternion multiplication
         c_new = hamilton_product(f, c) + hamilton_product(i, g)
-        c_new = self.cell_norm(c_new)
+        c_new = quaternion_normalize(c_new)
 
         # New hidden state: h_new = o * tanh(c_new)
         h_new = hamilton_product(o, torch.tanh(c_new))
-        h_new = self.hidden_norm(h_new)
+        h_new = quaternion_normalize(h_new)
 
         return h_new, c_new
 
@@ -157,11 +177,11 @@ class QuaternionLSTMCell(nn.Module):
 
         # New cell state: c_new = f * c + i * g
         c_new = hamilton_product(f, c) + hamilton_product(i, g)
-        c_new = self.cell_norm(c_new)
+        c_new = quaternion_normalize(c_new)
 
         # New hidden state: h_new = o * tanh(c_new)
         h_new = hamilton_product(o, torch.tanh(c_new))
-        h_new = self.hidden_norm(h_new)
+        h_new = quaternion_normalize(h_new)
 
         return h_new, c_new
 
