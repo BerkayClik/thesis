@@ -13,13 +13,34 @@ import torch
 import yfinance as yf
 
 
+def resample_ohlc(df: pd.DataFrame, target_interval: str) -> pd.DataFrame:
+    """
+    Resample OHLC data to a larger interval.
+
+    Args:
+        df: DataFrame with OHLC columns and DatetimeIndex.
+        target_interval: Target interval (e.g., "4h", "2h", "1d").
+
+    Returns:
+        Resampled DataFrame with proper OHLC aggregation.
+    """
+    resampled = df.resample(target_interval).agg({
+        'Open': 'first',
+        'High': 'max',
+        'Low': 'min',
+        'Close': 'last'
+    }).dropna()
+    return resampled
+
+
 def download_sp500_data(
     ticker: str = "^GSPC",
     start_date: Optional[str] = "2000-01-01",
     end_date: Optional[str] = "2024-12-31",
     cache_dir: Optional[str] = None,
     interval: str = "1d",
-    period: Optional[str] = None
+    period: Optional[str] = None,
+    resample_interval: Optional[str] = None
 ) -> pd.DataFrame:
     """
     Download S&P 500 OHLC data from Yahoo Finance.
@@ -34,6 +55,8 @@ def download_sp500_data(
                   Note: Hourly data is limited to last ~730 days on Yahoo Finance.
         period: Data period (e.g., "730d", "2y", "max"). If set, overrides start/end dates.
                 Recommended for hourly data to get maximum available data.
+        resample_interval: Optional target interval for resampling (e.g., "4h").
+                          Downloads at `interval` and resamples to this.
 
     Returns:
         DataFrame with columns [Open, High, Low, Close] and DatetimeIndex.
@@ -69,16 +92,21 @@ def download_sp500_data(
     # Drop any rows with NaN values
     df = df.dropna()
 
+    # Resample if requested
+    if resample_interval is not None:
+        df = resample_ohlc(df, resample_interval)
+
     # Cache if directory specified
     if cache_dir is not None and len(df) > 0:
         cache_path = Path(cache_dir)
         cache_path.mkdir(parents=True, exist_ok=True)
         # Include interval in cache filename to differentiate daily vs hourly data
         interval_suffix = f"_{interval}" if interval != "1d" else ""
+        resample_suffix = f"_resampled_{resample_interval}" if resample_interval else ""
         if period is not None:
-            cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{period}{interval_suffix}.csv"
+            cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{period}{interval_suffix}{resample_suffix}.csv"
         else:
-            cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{start_date}_{end_date}{interval_suffix}.csv"
+            cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{start_date}_{end_date}{interval_suffix}{resample_suffix}.csv"
         df.to_csv(cache_file)
 
     return df
@@ -91,7 +119,8 @@ def load_sp500_data(
     end_date: Optional[str] = "2024-12-31",
     cache_dir: Optional[str] = None,
     interval: str = "1d",
-    period: Optional[str] = None
+    period: Optional[str] = None,
+    resample_interval: Optional[str] = None
 ) -> pd.DataFrame:
     """
     Load S&P 500 data from cache or download if not available.
@@ -105,6 +134,7 @@ def load_sp500_data(
         interval: Data interval (default: "1d" for daily).
                   Options: "1h" (hourly), "1d" (daily), etc.
         period: Data period (e.g., "730d", "2y", "max"). If set, overrides start/end dates.
+        resample_interval: Optional target interval for resampling (e.g., "4h").
 
     Returns:
         DataFrame with columns [Open, High, Low, Close] and DatetimeIndex.
@@ -119,10 +149,11 @@ def load_sp500_data(
     if cache_dir is not None:
         cache_path = Path(cache_dir)
         interval_suffix = f"_{interval}" if interval != "1d" else ""
+        resample_suffix = f"_resampled_{resample_interval}" if resample_interval else ""
         if period is not None:
-            cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{period}{interval_suffix}.csv"
+            cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{period}{interval_suffix}{resample_suffix}.csv"
         else:
-            cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{start_date}_{end_date}{interval_suffix}.csv"
+            cache_file = cache_path / f"{ticker.replace('^', '').replace('=', '')}_{start_date}_{end_date}{interval_suffix}{resample_suffix}.csv"
         if cache_file.exists():
             df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
             return df
@@ -134,7 +165,8 @@ def load_sp500_data(
         end_date=end_date,
         cache_dir=cache_dir,
         interval=interval,
-        period=period
+        period=period,
+        resample_interval=resample_interval
     )
 
 

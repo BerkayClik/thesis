@@ -481,11 +481,17 @@ def run_experiment(
         end_date=config['data'].get('end_date'),
         cache_dir=config['data'].get('cache_dir', 'data/cache'),
         interval=config['data'].get('interval', '1d'),
-        period=config['data'].get('period')
+        period=config['data'].get('period'),
+        resample_interval=config['data'].get('resample_interval')
     )
 
     if verbose:
-        print(f"  Loaded {len(df)} data points ({config['data'].get('interval', '1d')} interval)")
+        interval_str = config['data'].get('interval', '1d')
+        resample_str = config['data'].get('resample_interval')
+        if resample_str:
+            print(f"  Loaded {len(df)} data points ({interval_str} -> {resample_str} resampled)")
+        else:
+            print(f"  Loaded {len(df)} data points ({interval_str} interval)")
 
     # Convert to tensor with dates
     data, dates = dataframe_to_tensor(df)
