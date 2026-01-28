@@ -145,13 +145,15 @@ def create_model(model_type: str, hidden_size: int, num_layers: int, dropout: fl
         return QuaternionLSTMNoAttention(
             hidden_size=hidden_size,
             num_layers=num_layers,
-            dropout=dropout
+            dropout=dropout,
+            input_size=4  # Match Real LSTM input_size for fair comparison
         )
     elif model_type == "quaternion_lstm_attention":
         return QNNAttentionModel(
             hidden_size=hidden_size,
             num_layers=num_layers,
-            dropout=dropout
+            dropout=dropout,
+            input_size=4  # Match Real LSTM input_size for fair comparison
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
