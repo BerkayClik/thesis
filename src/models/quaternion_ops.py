@@ -148,12 +148,13 @@ class QuaternionLinear(nn.Module):
         """
         Initialize quaternion weights using Glorot normal initialization.
 
-        Fan counts use quaternion feature dimensions (not multiplied by 4)
-        because the Hamilton product already couples the 4 components -
-        each quaternion feature contributes to all 4 output components.
+        The Hamilton product means each output scalar sums over 4 * in_features
+        terms (all 4 quaternion components of each input feature), and each input
+        scalar contributes to 4 * out_features output scalars. Fan counts are
+        scaled by 4 to account for this.
         """
-        fan_in = self.in_features
-        fan_out = self.out_features
+        fan_in = 4 * self.in_features
+        fan_out = 4 * self.out_features
         stdv = math.sqrt(2.0 / (fan_in + fan_out))
         nn.init.normal_(self.weight, 0, stdv)
         nn.init.zeros_(self.bias)
