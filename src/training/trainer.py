@@ -8,9 +8,10 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from typing import Dict, Optional, Callable, List, Any
+from typing import Dict, Optional, Callable, List, Any, Union
 import os
 import warnings
+from tqdm import tqdm
 
 
 def compute_gradient_norms(model: nn.Module) -> Dict[str, float]:
@@ -249,7 +250,7 @@ class Trainer:
         val_loader: DataLoader,
         num_epochs: int,
         patience: int = 10,
-        verbose: bool = True
+        verbose: Union[bool, int] = 1
     ) -> Dict:
         """
         Full training loop with early stopping.
@@ -259,11 +260,19 @@ class Trainer:
             val_loader: Validation data loader.
             num_epochs: Maximum number of epochs.
             patience: Early stopping patience.
-            verbose: Whether to print progress.
+            verbose: Verbosity level.
+                0: Silent (no output)
+                1: tqdm progress bar + improvement messages (default)
+                2: Detailed per-epoch output (legacy behavior)
+                True/False: Mapped to 1/0 for backward compatibility.
 
         Returns:
             Dictionary with training history.
         """
+        # Handle backward compatibility for bool verbose
+        if isinstance(verbose, bool):
+            verbose = 1 if verbose else 0
+
         history = {
             'train_loss': [],
             'val_loss': [],
@@ -284,7 +293,14 @@ class Trainer:
         best_val_loss = float('inf')
         patience_counter = 0
 
-        for epoch in range(num_epochs):
+        # Create tqdm progress bar for verbose >= 1
+        epoch_iterator = tqdm(
+            range(num_epochs),
+            desc="Training",
+            disable=(verbose == 0)
+        )
+
+        for epoch in epoch_iterator:
             train_result = self.train_epoch(train_loader, track_gradients=self.debug)
             train_loss = train_result['loss']
             val_loss = self.validate(val_loader)
@@ -292,6 +308,13 @@ class Trainer:
             history['train_loss'].append(train_loss)
             history['val_loss'].append(val_loss)
             history['learning_rates'].append(self.optimizer.param_groups[0]['lr'])
+
+            # Update tqdm postfix with current losses
+            if verbose >= 1:
+                epoch_iterator.set_postfix({
+                    'train': f'{train_loss:.4f}',
+                    'val': f'{val_loss:.4f}'
+                })
 
             # Track NaN detection
             if train_result.get('nan_detected', False):
@@ -309,31 +332,52 @@ class Trainer:
             if self.scheduler is not None:
                 self.scheduler.step(val_loss)
 
-            if verbose:
+            # Verbose level 2: detailed per-epoch output (legacy behavior)
+            if verbose >= 2:
                 msg = (f"Epoch {epoch+1}/{num_epochs} - "
                        f"Train Loss: {train_loss:.6f} - "
                        f"Val Loss: {val_loss:.6f}")
                 if self.debug:
                     msg += f" - Grad Norm: {train_result.get('grad_norm_mean', 0.0):.4f}"
                     msg += f" - LR: {self.optimizer.param_groups[0]['lr']:.6f}"
-                print(msg)
+                tqdm.write(msg)
 
             # Early stopping check
             if val_loss < best_val_loss:
+                improvement = best_val_loss - val_loss
+                # Verbose level 1: only print on improvement
+                if verbose == 1 and best_val_loss != float('inf'):
+                    tqdm.write(
+                        f"  [Epoch {epoch+1}] New best! "
+                        f"Val Loss: {val_loss:.6f} (improved by {improvement:.6f})"
+                    )
                 best_val_loss = val_loss
                 history['best_epoch'] = epoch
                 patience_counter = 0
                 self.save_checkpoint('best_model.pt')
             else:
                 patience_counter += 1
+                # Warn when patience is half exhausted
+                if verbose == 1 and patience_counter == patience // 2 and patience_counter > 0:
+                    tqdm.write(
+                        f"  [Epoch {epoch+1}] Warning: No improvement for "
+                        f"{patience_counter} epochs (patience: {patience_counter}/{patience})"
+                    )
 
             if patience_counter >= patience:
-                if verbose:
-                    print(f"Early stopping at epoch {epoch+1}")
+                if verbose >= 1:
+                    tqdm.write(f"  [Epoch {epoch+1}] Early stopping triggered")
                 break
 
         # Record final gradient explosion count
         history['grad_explosion_count'] = self.grad_explosion_count
+
+        # Print final summary for verbose >= 1
+        if verbose >= 1:
+            tqdm.write(
+                f"  Final: Best epoch {history['best_epoch']+1}, "
+                f"Val Loss: {best_val_loss:.6f}"
+            )
 
         return history
 

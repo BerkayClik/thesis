@@ -403,7 +403,7 @@ def run_single_experiment(
             val_loader=val_loader,
             num_epochs=config['training']['num_epochs'],
             patience=config['training']['patience'],
-            verbose=False
+            verbose=1 if verbose else 0
         )
 
         # Load best model for evaluation
