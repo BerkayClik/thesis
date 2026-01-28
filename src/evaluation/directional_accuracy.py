@@ -38,3 +38,47 @@ def compute_directional_accuracy(
     accuracy = correct.mean().item() * 100
 
     return accuracy
+
+
+def compute_directional_accuracy_3class(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    prev: torch.Tensor,
+    flat_threshold: float = 0.0
+) -> float:
+    """
+    Compute 3-class directional accuracy (UP / FLAT / DOWN).
+
+    Returns are classified into three classes based on flat_threshold:
+    - UP (+1): return > +flat_threshold
+    - FLAT (0): |return| <= flat_threshold
+    - DOWN (-1): return < -flat_threshold
+
+    Args:
+        pred: Predictions tensor of shape (n,).
+        target: Target tensor of shape (n,).
+        prev: Previous values tensor of shape (n,).
+        flat_threshold: Threshold in return space for the FLAT zone.
+            Typically computed as fraction * training_return_std.
+
+    Returns:
+        Directional accuracy as percentage (0-100).
+    """
+    # Compute returns
+    pred_return = (pred - prev) / (prev.abs() + 1e-8)
+    target_return = (target - prev) / (prev.abs() + 1e-8)
+
+    # Classify into 3 classes: UP (+1), FLAT (0), DOWN (-1)
+    def classify(returns, threshold):
+        classes = torch.zeros_like(returns)
+        classes[returns > threshold] = 1.0
+        classes[returns < -threshold] = -1.0
+        return classes
+
+    pred_class = classify(pred_return, flat_threshold)
+    target_class = classify(target_return, flat_threshold)
+
+    correct = (pred_class == target_class).float()
+    accuracy = correct.mean().item() * 100
+
+    return accuracy

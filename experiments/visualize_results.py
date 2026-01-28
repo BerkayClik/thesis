@@ -143,20 +143,23 @@ def plot_training_curves(results: Dict, output_dir: str, figsize=(14, 10)):
     plt.close()
 
 
-def plot_metric_comparison(results: Dict, output_dir: str, figsize=(14, 10)):
+def plot_metric_comparison(results: Dict, output_dir: str, figsize=(18, 10)):
     """
     Bar chart comparing all metrics across models with error bars.
     """
     model_results = results.get('model_results', results)
 
-    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio']
+    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio',
+               'directional_accuracy_3class', 'sharpe_ratio_3class']
     metric_labels = {
         'mape': 'MAPE % (Lower is Better)',
-        'directional_accuracy': 'Directional Accuracy % (Higher is Better)',
-        'sharpe_ratio': 'Sharpe Ratio (Higher is Better)'
+        'directional_accuracy': 'Dir. Acc. Binary % (Higher is Better)',
+        'sharpe_ratio': 'Sharpe Binary (Higher is Better)',
+        'directional_accuracy_3class': 'Dir. Acc. 3-Class % (Higher is Better)',
+        'sharpe_ratio_3class': 'Sharpe 3-Class (Higher is Better)'
     }
 
-    fig, axes = plt.subplots(1, 3, figsize=figsize)
+    fig, axes = plt.subplots(2, 3, figsize=figsize)
     axes = axes.flatten()
 
     models = list(model_results.keys())
@@ -191,6 +194,10 @@ def plot_metric_comparison(results: Dict, output_dir: str, figsize=(14, 10)):
                        xytext=(0, 3),
                        textcoords="offset points",
                        ha='center', va='bottom', fontsize=8)
+
+    # Hide unused subplots
+    for idx in range(len(metrics), len(axes)):
+        axes[idx].set_visible(False)
 
     fig.suptitle('Model Performance Comparison', fontsize=14, y=1.02)
     plt.tight_layout()
@@ -333,20 +340,23 @@ def plot_predictions_all_models(results: Dict, output_dir: str,
     plt.close()
 
 
-def plot_box_plots(results: Dict, output_dir: str, figsize=(14, 10)):
+def plot_box_plots(results: Dict, output_dir: str, figsize=(18, 10)):
     """
     Box plots showing distribution of metrics across seeds.
     """
     model_results = results.get('model_results', results)
 
-    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio']
+    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio',
+               'directional_accuracy_3class', 'sharpe_ratio_3class']
     metric_labels = {
         'mape': 'MAPE (%)',
-        'directional_accuracy': 'Directional Accuracy (%)',
-        'sharpe_ratio': 'Sharpe Ratio'
+        'directional_accuracy': 'Dir. Acc. Binary (%)',
+        'sharpe_ratio': 'Sharpe Binary',
+        'directional_accuracy_3class': 'Dir. Acc. 3-Class (%)',
+        'sharpe_ratio_3class': 'Sharpe 3-Class'
     }
 
-    fig, axes = plt.subplots(1, 3, figsize=figsize)
+    fig, axes = plt.subplots(2, 3, figsize=figsize)
     axes = axes.flatten()
 
     models = list(model_results.keys())
@@ -375,6 +385,10 @@ def plot_box_plots(results: Dict, output_dir: str, figsize=(14, 10)):
         ax.set_ylabel(metric_labels[metric])
         ax.set_xticklabels(labels, rotation=45, ha='right')
 
+    # Hide unused subplots
+    for idx in range(len(metrics), len(axes)):
+        axes[idx].set_visible(False)
+
     fig.suptitle('Metric Distribution Across Seeds', fontsize=14, y=1.02)
     plt.tight_layout()
 
@@ -385,7 +399,7 @@ def plot_box_plots(results: Dict, output_dir: str, figsize=(14, 10)):
     plt.close()
 
 
-def plot_significance_heatmap(results: Dict, output_dir: str, figsize=(10, 8)):
+def plot_significance_heatmap(results: Dict, output_dir: str, figsize=(12, 8)):
     """
     Heatmap showing p-values for statistical significance tests.
     """
@@ -395,7 +409,8 @@ def plot_significance_heatmap(results: Dict, output_dir: str, figsize=(10, 8)):
         print("No statistical significance data found.")
         return
 
-    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio']
+    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio',
+               'directional_accuracy_3class', 'sharpe_ratio_3class']
     models = list(significance.keys())
 
     # Create p-value matrix
@@ -488,11 +503,12 @@ def plot_parameter_efficiency(results: Dict, output_dir: str, figsize=(10, 6)):
 def plot_radar_chart(results: Dict, output_dir: str, figsize=(10, 10)):
     """
     Radar/spider chart comparing models across all metrics.
+    Uses 3-class variants as primary directional/sharpe metrics.
     """
     model_results = results.get('model_results', results)
 
-    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio']
-    metric_labels = ['MAPE', 'Dir. Acc.', 'Sharpe']
+    metrics = ['mape', 'directional_accuracy_3class', 'sharpe_ratio_3class']
+    metric_labels = ['MAPE', 'Dir. Acc. (3-Class)', 'Sharpe (3-Class)']
 
     # Normalize metrics to 0-1 scale (inverted for lower-is-better metrics)
     all_values = {metric: [] for metric in metrics}

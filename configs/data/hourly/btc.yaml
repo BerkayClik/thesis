@@ -51,6 +51,9 @@ evaluation:
     - mape
     - directional_accuracy
     - sharpe_ratio
+    - directional_accuracy_3class
+    - sharpe_ratio_3class
+  flat_threshold_fraction: 0.5
 
 # Device settings
 device: "cuda"  # Options: cuda, cpu, mps

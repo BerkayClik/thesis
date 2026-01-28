@@ -29,8 +29,8 @@ from src.models.qnn_attention_model import QuaternionLSTMNoAttention
 from src.training.trainer import Trainer
 from src.training.losses import mse_loss
 from src.evaluation.metrics import compute_mape
-from src.evaluation.directional_accuracy import compute_directional_accuracy
-from src.evaluation.sharpe_ratio import compute_sharpe_ratio
+from src.evaluation.directional_accuracy import compute_directional_accuracy, compute_directional_accuracy_3class
+from src.evaluation.sharpe_ratio import compute_sharpe_ratio, compute_sharpe_ratio_3class
 
 
 def load_config(config_path: str) -> Dict:
@@ -190,7 +190,8 @@ def compute_statistical_significance(
         return {}
 
     significance_results = {}
-    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio']
+    metrics = ['mape', 'directional_accuracy', 'sharpe_ratio',
+               'directional_accuracy_3class', 'sharpe_ratio_3class']
 
     # Get baseline values
     baseline_runs = results[baseline_model]['individual_runs']
@@ -243,12 +244,14 @@ def evaluate_model(
     model,
     dataloader: DataLoader,
     device: torch.device,
-    norm_stats: Dict
+    norm_stats: Dict,
+    flat_threshold_fraction: float = 0.5
 ) -> Dict:
     """
     Evaluate model on a dataset.
 
-    Returns dict with MAPE, directional accuracy, and Sharpe ratio.
+    Returns dict with MAPE, directional accuracy (binary and 3-class),
+    and Sharpe ratio (binary and 3-class).
     All metrics are computed on denormalized (original scale) prices.
 
     Args:
@@ -256,6 +259,7 @@ def evaluate_model(
         dataloader: DataLoader for the evaluation dataset.
         device: Compute device.
         norm_stats: Normalization statistics for denormalization.
+        flat_threshold_fraction: Fraction of training return_std for FLAT zone (default: 0.5).
     """
     model.eval()
     all_preds = []
@@ -285,6 +289,10 @@ def evaluate_model(
     targets_denorm = denormalize(targets, norm_stats, col=3)
     prevs_denorm = denormalize(prevs, norm_stats, col=3)
 
+    # Compute flat threshold from training return std
+    return_std = norm_stats.get('return_std', 0.0)
+    flat_threshold = flat_threshold_fraction * return_std
+
     return {
         'mape': compute_mape(preds_denorm, targets_denorm),
         'directional_accuracy': compute_directional_accuracy(
@@ -293,6 +301,14 @@ def evaluate_model(
         'sharpe_ratio': compute_sharpe_ratio(
             preds_denorm, targets_denorm, prevs_denorm
         ),
+        'directional_accuracy_3class': compute_directional_accuracy_3class(
+            preds_denorm, targets_denorm, prevs_denorm, flat_threshold=flat_threshold
+        ),
+        'sharpe_ratio_3class': compute_sharpe_ratio_3class(
+            preds_denorm, targets_denorm, prevs_denorm, flat_threshold=flat_threshold
+        ),
+        'flat_threshold': flat_threshold,
+        'return_std': return_std,
         # Store predictions for visualization
         'predictions': preds_denorm.numpy().tolist(),
         'targets': targets_denorm.numpy().tolist(),
@@ -313,7 +329,8 @@ def run_single_experiment(
     verbose: bool = True,
     debug: bool = False,
     variant_name: str = "default",
-    fast_mode: bool = False
+    fast_mode: bool = False,
+    flat_threshold_fraction: float = 0.5
 ) -> Dict:
     """
     Run a single experiment with one model configuration and seed.
@@ -414,7 +431,8 @@ def run_single_experiment(
                 print(f"    Warning: No checkpoint found, using current model state")
 
     # Evaluate on test set
-    test_metrics = evaluate_model(model, test_loader, device, norm_stats)
+    test_metrics = evaluate_model(model, test_loader, device, norm_stats,
+                                  flat_threshold_fraction=flat_threshold_fraction)
 
     result = {
         'seed': seed,
@@ -537,6 +555,9 @@ def run_experiment(
     val_loader = DataLoader(val_dataset, batch_size=batch_size)
     test_loader = DataLoader(test_dataset, batch_size=batch_size)
 
+    # Get evaluation settings
+    flat_threshold_fraction = config.get('evaluation', {}).get('flat_threshold_fraction', 0.5)
+
     # Get seeds
     seeds = experiment_config.get('seeds', [config['training']['seed']])
 
@@ -567,7 +588,8 @@ def run_experiment(
                 verbose=verbose,
                 debug=debug,
                 variant_name=variant_name,
-                fast_mode=fast_mode
+                fast_mode=fast_mode,
+                flat_threshold_fraction=flat_threshold_fraction
             )
             variant_results.append(result)
 
@@ -575,13 +597,17 @@ def run_experiment(
         test_mapes = [r['test_metrics']['mape'] for r in variant_results]
         test_das = [r['test_metrics']['directional_accuracy'] for r in variant_results]
         test_sharpes = [r['test_metrics']['sharpe_ratio'] for r in variant_results]
+        test_das_3c = [r['test_metrics']['directional_accuracy_3class'] for r in variant_results]
+        test_sharpes_3c = [r['test_metrics']['sharpe_ratio_3class'] for r in variant_results]
 
         all_results[variant_name] = {
             'individual_runs': variant_results,
             'aggregated': {
                 'mape': {'mean': np.mean(test_mapes), 'std': np.std(test_mapes)},
                 'directional_accuracy': {'mean': np.mean(test_das), 'std': np.std(test_das)},
-                'sharpe_ratio': {'mean': np.mean(test_sharpes), 'std': np.std(test_sharpes)}
+                'sharpe_ratio': {'mean': np.mean(test_sharpes), 'std': np.std(test_sharpes)},
+                'directional_accuracy_3class': {'mean': np.mean(test_das_3c), 'std': np.std(test_das_3c)},
+                'sharpe_ratio_3class': {'mean': np.mean(test_sharpes_3c), 'std': np.std(test_sharpes_3c)}
             }
         }
 
@@ -592,8 +618,10 @@ def run_experiment(
         if verbose:
             print(f"  Results (mean ± std over {len(seeds)} seeds):")
             print(f"    MAPE: {np.mean(test_mapes):.2f}% ± {np.std(test_mapes):.2f}%")
-            print(f"    Dir Acc: {np.mean(test_das):.2f}% ± {np.std(test_das):.2f}%")
-            print(f"    Sharpe: {np.mean(test_sharpes):.3f} ± {np.std(test_sharpes):.3f}")
+            print(f"    Dir Acc (binary): {np.mean(test_das):.2f}% ± {np.std(test_das):.2f}%")
+            print(f"    Dir Acc (3-class): {np.mean(test_das_3c):.2f}% ± {np.std(test_das_3c):.2f}%")
+            print(f"    Sharpe (binary): {np.mean(test_sharpes):.3f} ± {np.std(test_sharpes):.3f}")
+            print(f"    Sharpe (3-class): {np.mean(test_sharpes_3c):.3f} ± {np.std(test_sharpes_3c):.3f}")
 
     # Compute statistical significance against baseline
     significance_results = compute_statistical_significance(all_results, baseline_model="real_lstm")
@@ -609,13 +637,13 @@ def print_results_table(results: Dict):
     model_results = results.get('model_results', results)
     significance = results.get('statistical_significance', {})
 
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 120)
     print("EXPERIMENT RESULTS")
-    print("=" * 80)
+    print("=" * 120)
 
     # Header
-    print(f"{'Model':<30} {'MAPE (%)':<18} {'Dir Acc (%)':<18} {'Sharpe':<14}")
-    print("-" * 80)
+    print(f"{'Model':<30} {'MAPE (%)':<18} {'Dir Acc (%)':<18} {'Sharpe':<14} {'DA 3-cls (%)':<18} {'Sharpe 3-cls':<14}")
+    print("-" * 120)
 
     # Rows
     for model_name, model_data in model_results.items():
@@ -623,9 +651,11 @@ def print_results_table(results: Dict):
         mape_str = f"{agg['mape']['mean']:.2f} ± {agg['mape']['std']:.2f}"
         da_str = f"{agg['directional_accuracy']['mean']:.2f} ± {agg['directional_accuracy']['std']:.2f}"
         sharpe_str = f"{agg['sharpe_ratio']['mean']:.3f} ± {agg['sharpe_ratio']['std']:.3f}"
-        print(f"{model_name:<30} {mape_str:<18} {da_str:<18} {sharpe_str:<14}")
+        da3_str = f"{agg['directional_accuracy_3class']['mean']:.2f} ± {agg['directional_accuracy_3class']['std']:.2f}"
+        sharpe3_str = f"{agg['sharpe_ratio_3class']['mean']:.3f} ± {agg['sharpe_ratio_3class']['std']:.3f}"
+        print(f"{model_name:<30} {mape_str:<18} {da_str:<18} {sharpe_str:<14} {da3_str:<18} {sharpe3_str:<14}")
 
-    print("=" * 80)
+    print("=" * 120)
 
     # Print statistical significance if available
     if significance:

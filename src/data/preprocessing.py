@@ -202,6 +202,11 @@ def preprocess_data(
     # Step 2: Compute normalization stats from TRAIN ONLY
     _, norm_stats = normalize_data(train_raw)
 
+    # Compute training-set return std for 3-class directional threshold
+    train_close = train_raw[:, 3]
+    train_returns = (train_close[1:] - train_close[:-1]) / (train_close[:-1].abs() + 1e-8)
+    norm_stats['return_std'] = train_returns.std().item()
+
     # Step 3: Apply normalization using train stats to all splits
     train_norm, _ = normalize_data(train_raw, stats=norm_stats)
     val_norm, _ = normalize_data(val_raw, stats=norm_stats)
@@ -256,6 +261,11 @@ def preprocess_data_ratio(
 
     # Step 2: Compute normalization stats from TRAIN ONLY
     _, norm_stats = normalize_data(train_raw)
+
+    # Compute training-set return std for 3-class directional threshold
+    train_close = train_raw[:, 3]
+    train_returns = (train_close[1:] - train_close[:-1]) / (train_close[:-1].abs() + 1e-8)
+    norm_stats['return_std'] = train_returns.std().item()
 
     # Step 3: Apply normalization using train stats to all splits
     train_norm, _ = normalize_data(train_raw, stats=norm_stats)
