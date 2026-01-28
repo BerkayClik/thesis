@@ -333,8 +333,16 @@ def run_single_experiment(
     )
 
     # Compile model for faster execution (PyTorch 2.0+)
-    # Skip torch.compile on MPS - quaternion models exceed Metal shader buffer limits
-    if hasattr(torch, 'compile') and device.type != 'mps':
+    # Skip torch.compile for:
+    # - MPS: quaternion models exceed Metal shader buffer limits
+    # - Quaternion models: sequential loop causes compilation issues (high memory, slow)
+    #   Native PyTorch LSTM uses CuDNN which is already optimized
+    should_compile = (
+        hasattr(torch, 'compile')
+        and device.type != 'mps'
+        and 'quaternion' not in model_config['type']
+    )
+    if should_compile:
         try:
             model = torch.compile(model)
             if verbose:
