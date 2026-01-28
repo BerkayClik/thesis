@@ -146,29 +146,16 @@ class QuaternionLinear(nn.Module):
 
     def reset_parameters(self):
         """
-        Initialize quaternion weights near unit quaternions for stable gradients.
+        Initialize quaternion weights using Xavier (Glorot) uniform initialization.
 
-        Unit quaternions preserve magnitude during Hamilton product, preventing
-        gradient vanishing/explosion. Each weight quaternion is initialized as
-        a small rotation (near-identity quaternion).
+        Xavier initialization provides appropriate variance scaling for
+        neural networks, helping to prevent gradient vanishing/explosion.
         """
-        with torch.no_grad():
-            for out_idx in range(self.out_features):
-                for in_idx in range(self.in_features):
-                    # Small rotation angle for near-identity quaternion
-                    theta = torch.empty(1).uniform_(-0.1, 0.1)
-                    # Random unit axis
-                    axis = torch.randn(3)
-                    axis = axis / (axis.norm() + 1e-8)
-
-                    # q = cos(theta/2) + sin(theta/2) * axis
-                    self.weight.data[out_idx, in_idx, 0] = torch.cos(theta / 2)
-                    self.weight.data[out_idx, in_idx, 1] = torch.sin(theta / 2) * axis[0]
-                    self.weight.data[out_idx, in_idx, 2] = torch.sin(theta / 2) * axis[1]
-                    self.weight.data[out_idx, in_idx, 3] = torch.sin(theta / 2) * axis[2]
-
-            # Zero bias initialization
-            nn.init.zeros_(self.bias)
+        fan_in = self.in_features * 4
+        fan_out = self.out_features * 4
+        stdv = math.sqrt(6.0 / (fan_in + fan_out))
+        nn.init.uniform_(self.weight, -stdv, stdv)
+        nn.init.uniform_(self.bias, -stdv, stdv)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """

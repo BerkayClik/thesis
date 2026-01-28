@@ -59,20 +59,20 @@ class QuaternionLSTMBase(nn.Module):
 
     def encode_quaternion(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Encode OHLC data where each feature becomes a pure real quaternion.
+        Encode OHLC as single quaternion: q = O + Hi + Lj + Ck.
+
+        This encoding preserves cross-correlations between OHLC features
+        through the Hamilton product, which is the key advantage of
+        quaternion representations.
 
         Args:
             x: OHLC input of shape (batch, seq_len, 4).
 
         Returns:
-            Quaternion tensor of shape (batch, seq_len, 4, 4) where each
-            of the 4 OHLC features is encoded as a quaternion with the
-            feature value as the real component.
+            Quaternion tensor of shape (batch, seq_len, 1, 4) where the
+            4 OHLC values become the 4 quaternion components [r, i, j, k].
         """
-        batch, seq_len, features = x.shape
-        q = torch.zeros(batch, seq_len, features, 4, device=x.device, dtype=x.dtype)
-        q[..., 0] = x  # Real component = feature value
-        return q
+        return x.unsqueeze(2)  # (batch, seq, 4) → (batch, seq, 1, 4)
 
 
 class QNNAttentionModel(QuaternionLSTMBase):
@@ -83,7 +83,7 @@ class QNNAttentionModel(QuaternionLSTMBase):
         hidden_size: Size of quaternion hidden features.
         num_layers: Number of Quaternion LSTM layers.
         dropout: Dropout rate.
-        input_size: Number of input quaternion features (default: 4 for OHLC).
+        input_size: Number of input quaternion features (default: 1 for single OHLC quaternion).
     """
 
     def __init__(
@@ -91,7 +91,7 @@ class QNNAttentionModel(QuaternionLSTMBase):
         hidden_size: int,
         num_layers: int = 1,
         dropout: float = 0.0,
-        input_size: int = 4
+        input_size: int = 1
     ):
         super().__init__(hidden_size, num_layers, dropout, input_size)
         self.attention = TemporalAttention(hidden_size)
@@ -146,7 +146,7 @@ class QuaternionLSTMNoAttention(QuaternionLSTMBase):
         hidden_size: Size of quaternion hidden features.
         num_layers: Number of Quaternion LSTM layers.
         dropout: Dropout rate.
-        input_size: Number of input quaternion features (default: 4 for OHLC).
+        input_size: Number of input quaternion features (default: 1 for single OHLC quaternion).
     """
 
     def __init__(
@@ -154,7 +154,7 @@ class QuaternionLSTMNoAttention(QuaternionLSTMBase):
         hidden_size: int,
         num_layers: int = 1,
         dropout: float = 0.0,
-        input_size: int = 4
+        input_size: int = 1
     ):
         super().__init__(hidden_size, num_layers, dropout, input_size)
 

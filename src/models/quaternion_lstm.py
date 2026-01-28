@@ -41,10 +41,9 @@ class QuaternionLSTMCell(nn.Module):
         self.W_input = QuaternionLinear(input_size, 4 * hidden_size)
         self.W_hidden = QuaternionLinear(hidden_size, 4 * hidden_size)
 
-        # Note: LayerNorm removed - gradient stability provided by:
-        # 1. Unit quaternion weight initialization
-        # 2. Residual connections
-        # 3. Forget gate bias initialization
+        # LayerNorm for gradient stability
+        self.cell_norm = nn.LayerNorm(4)
+        self.hidden_norm = nn.LayerNorm(4)
 
         # Initialize forget gate bias to +1.0 for better gradient flow
         # (per Jozefowicz et al. 2015 "An Empirical Exploration of RNN Architectures")
@@ -52,7 +51,7 @@ class QuaternionLSTMCell(nn.Module):
 
     def _init_forget_gate_bias(self):
         """
-        Initialize forget gate bias to +1.0 for better gradient flow.
+        Initialize forget gate bias to +1.0 on REAL COMPONENT ONLY.
 
         Per Jozefowicz et al. 2015, initializing forget gate bias to 1.0
         helps with learning long-term dependencies by keeping the forget
@@ -61,13 +60,17 @@ class QuaternionLSTMCell(nn.Module):
         Gate layout in fused weights: [i, f, g, o] each of size hidden_size
         Forget gate is at index hidden_size:2*hidden_size
 
-        All quaternion components get +1.0 for open forget gate (not just real).
+        IMPORTANT: Only the real component (index 0) gets +1.0 because:
+        - Identity quaternion = [1, 0, 0, 0]
+        - For forget gate to "remember", f ≈ identity quaternion
+        - Adding +1 to all components would give [~0.73, ~0.73, ~0.73, ~0.73]
+          which is NOT close to identity and breaks the forget mechanism.
         """
         with torch.no_grad():
-            # Add +1.0 to all quaternion components of forget gate biases
+            # Add +1.0 to REAL COMPONENT ONLY of forget gate biases
             # Forget gate is the 2nd chunk: index [hidden_size:2*hidden_size]
-            self.W_input.bias.data[self.hidden_size:2*self.hidden_size, :] += 1.0
-            self.W_hidden.bias.data[self.hidden_size:2*self.hidden_size, :] += 1.0
+            self.W_input.bias.data[self.hidden_size:2*self.hidden_size, 0] += 1.0
+            self.W_hidden.bias.data[self.hidden_size:2*self.hidden_size, 0] += 1.0
 
     def forward(
         self,
@@ -111,13 +114,11 @@ class QuaternionLSTMCell(nn.Module):
         # New cell state: c_new = f * c + i * g
         # Using Hamilton product for quaternion multiplication
         c_new = hamilton_product(f, c) + hamilton_product(i, g)
+        c_new = self.cell_norm(c_new)
 
         # New hidden state: h_new = o * tanh(c_new)
         h_new = hamilton_product(o, torch.tanh(c_new))
-
-        # Residual connection for gradient highway
-        if h is not None:
-            h_new = h_new + 0.1 * h
+        h_new = self.hidden_norm(h_new)
 
         return h_new, c_new
 
@@ -156,12 +157,11 @@ class QuaternionLSTMCell(nn.Module):
 
         # New cell state: c_new = f * c + i * g
         c_new = hamilton_product(f, c) + hamilton_product(i, g)
+        c_new = self.cell_norm(c_new)
 
         # New hidden state: h_new = o * tanh(c_new)
         h_new = hamilton_product(o, torch.tanh(c_new))
-
-        # Residual connection for gradient highway
-        h_new = h_new + 0.1 * h
+        h_new = self.hidden_norm(h_new)
 
         return h_new, c_new
 
