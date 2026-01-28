@@ -20,7 +20,7 @@ class QuaternionLSTMCell(nn.Module):
 
     Features for training stability:
     - Forget gate bias initialized to +1.0 (per Jozefowicz et al. 2015)
-    - LayerNorm applied to cell and hidden states to prevent gradient explosion
+    - LayerNorm applied to cell and hidden states for gradient stability
 
     Args:
         input_size: Number of input quaternion features.
@@ -56,14 +56,6 @@ class QuaternionLSTMCell(nn.Module):
         # Applied over the quaternion components (4D normalization)
         self.cell_norm = nn.LayerNorm(4)
         self.hidden_norm = nn.LayerNorm(4)
-
-        # Gate pre-activation normalization to prevent magnitude explosion
-        # Hamilton product amplifies magnitude across sequential operations,
-        # so we normalize gate inputs before activation to ensure stable gradients
-        self.gate_norm_i = nn.LayerNorm(4)
-        self.gate_norm_f = nn.LayerNorm(4)
-        self.gate_norm_g = nn.LayerNorm(4)
-        self.gate_norm_o = nn.LayerNorm(4)
 
         # Initialize forget gate bias to +1.0 for better gradient flow
         # (per Jozefowicz et al. 2015 "An Empirical Exploration of RNN Architectures")
@@ -139,18 +131,17 @@ class QuaternionLSTMCell(nn.Module):
         else:
             h, c = hx
 
-        # Input gate: i = sigmoid(norm(W_ii @ x + W_hi @ h))
-        # Pre-activation normalization prevents gate saturation from Hamilton product magnitude amplification
-        i = self._quaternion_sigmoid(self.gate_norm_i(self.W_ii(x) + self.W_hi(h)))
+        # Input gate: i = sigmoid(W_ii @ x + W_hi @ h)
+        i = self._quaternion_sigmoid(self.W_ii(x) + self.W_hi(h))
 
-        # Forget gate: f = sigmoid(norm(W_if @ x + W_hf @ h))
-        f = self._quaternion_sigmoid(self.gate_norm_f(self.W_if(x) + self.W_hf(h)))
+        # Forget gate: f = sigmoid(W_if @ x + W_hf @ h)
+        f = self._quaternion_sigmoid(self.W_if(x) + self.W_hf(h))
 
-        # Cell candidate: g = tanh(norm(W_ig @ x + W_hg @ h))
-        g = self._quaternion_tanh(self.gate_norm_g(self.W_ig(x) + self.W_hg(h)))
+        # Cell candidate: g = tanh(W_ig @ x + W_hg @ h)
+        g = self._quaternion_tanh(self.W_ig(x) + self.W_hg(h))
 
-        # Output gate: o = sigmoid(norm(W_io @ x + W_ho @ h))
-        o = self._quaternion_sigmoid(self.gate_norm_o(self.W_io(x) + self.W_ho(h)))
+        # Output gate: o = sigmoid(W_io @ x + W_ho @ h)
+        o = self._quaternion_sigmoid(self.W_io(x) + self.W_ho(h))
 
         # New cell state: c_new = f * c + i * g
         # Using Hamilton product for quaternion multiplication

@@ -359,20 +359,18 @@ class QuaternionLSTMCell(nn.Module):
         self.W_hi = QuaternionLinear(hidden_size, hidden_size)
         # ... (forget, cell, output gates similar)
 
-        # LayerNorm for training stability
+        # LayerNorm for training stability (cell and hidden states only)
         self.cell_norm = nn.LayerNorm(4)
         self.hidden_norm = nn.LayerNorm(4)
-        self.gate_norm_i = nn.LayerNorm(4)  # Per-gate normalization
-        # ... (gate_norm_f, gate_norm_g, gate_norm_o similar)
 
     def forward(self, x, hx):
         h, c = hx  # Both are quaternions: (batch, hidden, 4)
 
-        # Gates with pre-activation normalization
-        i = sigmoid(gate_norm_i(self.W_ii(x) + self.W_hi(h)))  # input gate
-        f = sigmoid(gate_norm_f(self.W_if(x) + self.W_hf(h)))  # forget gate
-        g = tanh(gate_norm_g(self.W_ig(x) + self.W_hg(h)))     # cell candidate
-        o = sigmoid(gate_norm_o(self.W_io(x) + self.W_ho(h)))  # output gate
+        # Gate computations (activations naturally bound outputs)
+        i = sigmoid(self.W_ii(x) + self.W_hi(h))  # input gate
+        f = sigmoid(self.W_if(x) + self.W_hf(h))  # forget gate
+        g = tanh(self.W_ig(x) + self.W_hg(h))     # cell candidate
+        o = sigmoid(self.W_io(x) + self.W_ho(h))  # output gate
 
         # State updates use Hamilton product + LayerNorm
         c_new = hamilton_product(f, c) + hamilton_product(i, g)
@@ -450,15 +448,15 @@ In standard LSTM, sigmoid and tanh are applied element-wise to gate values. For 
 
 The Quaternion LSTM includes several features for stable training:
 
-**1. LayerNorm on Gates and States:**
-- Pre-activation normalization on each gate prevents magnitude explosion from Hamilton product
-- Post-update normalization on cell state (c) and hidden state (h)
+**1. LayerNorm on Cell and Hidden States:**
+- Post-update normalization on cell state (c) and hidden state (h) prevents gradient explosion
+- Gate outputs are naturally bounded by sigmoid [0,1] and tanh [-1,1], so pre-activation normalization is unnecessary
 
 ```python
-# Gate normalization before activation
-i = sigmoid(gate_norm_i(W_ii(x) + W_hi(h)))
+# Gate computations (no pre-activation normalization needed)
+i = sigmoid(W_ii(x) + W_hi(h))
 
-# State normalization after update
+# State normalization after Hamilton product updates
 c_new = cell_norm(hamilton_product(f, c) + hamilton_product(i, g))
 h_new = hidden_norm(hamilton_product(o, tanh(c_new)))
 ```
