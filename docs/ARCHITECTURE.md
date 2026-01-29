@@ -329,6 +329,8 @@ output = hamilton_product(W, x) + b  # Hamilton product
 
 ### Quaternion Linear Layer
 
+The `QuaternionLinear` layer uses an **optimized matmul-based** implementation of the Hamilton product. Instead of broadcasting element-wise quaternion multiplications, it concatenates quaternion components and performs 4 standard matrix multiplications (leveraging cuBLAS):
+
 ```python
 class QuaternionLinear(nn.Module):
     def __init__(self, in_features, out_features):
@@ -338,49 +340,75 @@ class QuaternionLinear(nn.Module):
 
     def forward(self, x):
         # x: (batch, in_features, 4)
-        # Compute Hamilton product for each in/out pair
-        x_expanded = x.unsqueeze(1)           # (batch, 1, in, 4)
-        w_expanded = self.weight.unsqueeze(0)  # (1, out, in, 4)
+        # Extract quaternion components
+        x_r, x_i, x_j, x_k = x[..., 0], x[..., 1], x[..., 2], x[..., 3]
+        W_r, W_i, W_j, W_k = (self.weight[..., 0], self.weight[..., 1],
+                               self.weight[..., 2], self.weight[..., 3])
 
-        products = hamilton_product(x_expanded, w_expanded)  # (batch, out, in, 4)
-        output = products.sum(dim=2) + self.bias            # (batch, out, 4)
-        return output
+        # Concatenate input components: (batch, 4*in_features)
+        x_flat = torch.cat([x_r, x_i, x_j, x_k], dim=-1)
+
+        # Build combined weight matrices for each output component
+        # Each: (out_features, 4*in_features)
+        W_for_r = torch.cat([ W_r, -W_i, -W_j, -W_k], dim=1)
+        W_for_i = torch.cat([ W_i,  W_r,  W_k, -W_j], dim=1)
+        W_for_j = torch.cat([ W_j, -W_k,  W_r,  W_i], dim=1)
+        W_for_k = torch.cat([ W_k,  W_j, -W_i,  W_r], dim=1)
+
+        # 4 matmuls instead of element-wise broadcast + sum
+        y_r = x_flat @ W_for_r.T
+        y_i = x_flat @ W_for_i.T
+        y_j = x_flat @ W_for_j.T
+        y_k = x_flat @ W_for_k.T
+
+        return torch.stack([y_r, y_i, y_j, y_k], dim=-1) + self.bias
 ```
+
+This approach encodes the full Hamilton product multiplication rules into concatenated weight matrices, turning quaternion algebra into standard dense matmuls that hardware accelerators handle efficiently.
 
 ### Quaternion LSTM Cell
 
-Same gates as regular LSTM, but using quaternion operations:
+Same gates as regular LSTM, but using quaternion linear layers for weight transformations. The cell uses **fused gate computation** — 2 `QuaternionLinear` calls produce all 4 gates at once, instead of 8 separate layers:
 
 ```python
 class QuaternionLSTMCell(nn.Module):
     def __init__(self, input_size, hidden_size):
-        # 8 quaternion linear layers (2 per gate)
-        self.W_ii = QuaternionLinear(input_size, hidden_size)
-        self.W_hi = QuaternionLinear(hidden_size, hidden_size)
-        # ... (forget, cell, output gates similar)
+        # Fused gate projections: all 4 gates computed together
+        # Output shape: (batch, 4 * hidden_size, 4) for [i, f, g, o] gates
+        self.W_input = QuaternionLinear(input_size, 4 * hidden_size)
+        self.W_hidden = QuaternionLinear(hidden_size, 4 * hidden_size)
 
-        # LayerNorm for training stability (cell and hidden states only)
-        self.cell_norm = nn.LayerNorm(4)
-        self.hidden_norm = nn.LayerNorm(4)
+        # Forget gate bias initialized to +1.0 (Jozefowicz et al. 2015)
+        self._init_forget_gate_bias()
 
     def forward(self, x, hx):
         h, c = hx  # Both are quaternions: (batch, hidden, 4)
 
-        # Gate computations (activations naturally bound outputs)
-        i = sigmoid(self.W_ii(x) + self.W_hi(h))  # input gate
-        f = sigmoid(self.W_if(x) + self.W_hf(h))  # forget gate
-        g = tanh(self.W_ig(x) + self.W_hg(h))     # cell candidate
-        o = sigmoid(self.W_io(x) + self.W_ho(h))  # output gate
+        # Fused gate computation: 2 calls instead of 8
+        gates = self.W_input(x) + self.W_hidden(h)  # (batch, 4*hidden, 4)
 
-        # State updates use Hamilton product + LayerNorm
-        c_new = hamilton_product(f, c) + hamilton_product(i, g)
-        c_new = self.cell_norm(c_new)
+        # Split into 4 gates (chunk is essentially free — view only)
+        i_gate, f_gate, g_gate, o_gate = gates.chunk(4, dim=1)
 
-        h_new = hamilton_product(o, tanh(c_new))
-        h_new = self.hidden_norm(h_new)
+        # Apply activations
+        i = sigmoid(i_gate)
+        f = sigmoid(f_gate)
+        g = tanh(g_gate)
+        o = sigmoid(o_gate)
+
+        # Element-wise gating (standard LSTM semantics)
+        # Quaternion structure is in W_input/W_hidden (QuaternionLinear)
+        c_new = f * c + i * g
+        h_new = o * tanh(c_new)
 
         return h_new, c_new
 ```
+
+**Key design decisions:**
+
+- **Fused gates:** A single `QuaternionLinear(input_size, 4 * hidden_size)` computes all 4 gate projections at once, reducing kernel launches from 8 to 2.
+- **Element-wise state updates:** The cell state update uses standard element-wise `f * c + i * g` rather than `hamilton_product(f, c) + hamilton_product(i, g)`. The quaternion structure is captured in the weight matrices (via `QuaternionLinear`), while gating preserves the LSTM cell state as a linear memory highway.
+- **No LayerNorm:** Gate outputs are naturally bounded by sigmoid [0,1] and tanh [-1,1], and gradient clipping handles stability.
 
 ### Shape Flow
 
@@ -438,7 +466,7 @@ In standard LSTM, sigmoid and tanh are applied element-wise to gate values. For 
 
 4. **Empirical Success:** This approach works well in our experiments without the complexity of quaternion-specific activations.
 
-**Important Note:** This means our "quaternion gating" is not mathematically equivalent to pure quaternion operations. The key quaternion benefit comes from the Hamilton product in state updates (c_new, h_new), not from the activation functions.
+**Important Note:** This means our "quaternion gating" is not mathematically equivalent to pure quaternion operations. The key quaternion benefit comes from the Hamilton product in the **weight matrices** (`QuaternionLinear`), which mix all 4 OHLC components when computing gate pre-activations. The state updates themselves (c_new, h_new) use standard element-wise operations.
 
 **References:**
 - Gaudet, C. & Maida, A. (2018). Deep Quaternion Networks. IJCNN.
@@ -448,27 +476,32 @@ In standard LSTM, sigmoid and tanh are applied element-wise to gate values. For 
 
 The Quaternion LSTM includes several features for stable training:
 
-**1. LayerNorm on Cell and Hidden States:**
-- Post-update normalization on cell state (c) and hidden state (h) prevents gradient explosion
-- Gate outputs are naturally bounded by sigmoid [0,1] and tanh [-1,1], so pre-activation normalization is unnecessary
-
-```python
-# Gate computations (no pre-activation normalization needed)
-i = sigmoid(W_ii(x) + W_hi(h))
-
-# State normalization after Hamilton product updates
-c_new = cell_norm(hamilton_product(f, c) + hamilton_product(i, g))
-h_new = hidden_norm(hamilton_product(o, tanh(c_new)))
-```
-
-**2. Forget Gate Bias Initialization:**
+**1. Forget Gate Bias Initialization:**
 - Forget gate bias initialized to +1.0 (per Jozefowicz et al. 2015)
 - Biases sigmoid toward 1, keeping cell state information initially
 - Helps with learning long-term dependencies
 
-**3. Xavier-like Weight Initialization:**
-- Quaternion weights use adapted Xavier uniform initialization
-- Accounts for 4D quaternion structure in fan calculation
+```python
+# Gate layout in fused weights: [i, f, g, o] each of size hidden_size
+# Forget gate is at index hidden_size:2*hidden_size
+self.W_input.bias.data[hidden_size:2*hidden_size] += 1.0
+self.W_hidden.bias.data[hidden_size:2*hidden_size] += 1.0
+```
+
+**2. Glorot Normal Weight Initialization:**
+- Quaternion weights use Glorot (Xavier) **normal** initialization
+- Fan counts are scaled by 4 to account for the Hamilton product structure, where each output scalar sums over `4 * in_features` terms
+
+```python
+fan_in = 4 * self.in_features
+fan_out = 4 * self.out_features
+stdv = math.sqrt(2.0 / (fan_in + fan_out))
+nn.init.normal_(self.weight, 0, stdv)
+```
+
+**3. Gradient Clipping:**
+- `clip_grad_norm_(params, max_norm=1.0)` applied during training to prevent gradient explosion
+- Gate activations (sigmoid, tanh) naturally bound outputs, so no LayerNorm is needed on cell/hidden states
 
 ---
 
@@ -580,7 +613,7 @@ We run **7 variants** in experiments. This includes a naive baseline plus 6 mode
 
 | # | Variant Name | Architecture | Hidden | Purpose |
 |---|--------------|--------------|--------|---------|
-| 0 | `naive_zero` | Always predicts 0 | N/A | Naive baseline (no learning) |
+| 0 | `naive_zero` | Persistence (last close) | N/A | Naive baseline (no learning) |
 | 1 | `real_lstm` | Real LSTM | 64 | Baseline |
 | 2 | `real_lstm_attention` | Real LSTM + Attention | 64 | Baseline |
 | 3 | `quaternion_lstm` | Quaternion LSTM | 64 | Layer-matched |
@@ -588,7 +621,7 @@ We run **7 variants** in experiments. This includes a naive baseline plus 6 mode
 | 5 | `quaternion_lstm_param_matched` | Quaternion LSTM | 32 | Parameter-matched |
 | 6 | `quaternion_lstm_attention_param_matched` | Quaternion LSTM + Attention | 32 | Parameter-matched |
 
-**Naive baseline:** Always predicts zero (no price change). Establishes that models are learning something meaningful.
+**Naive baseline:** A persistence model that predicts the last observed close price as the next value (random walk hypothesis). Establishes that models are learning something meaningful beyond simple persistence.
 
 **Layer-matched (hidden=64):** Same architecture depth as real LSTM, but quaternion has more parameters. Tests if quaternion math itself helps.
 
@@ -642,7 +675,7 @@ The research question: **Does quaternion encoding help predict stock prices?**
 ## Data Flow Diagram (Complete)
 
 ```
-Raw OHLC Data (2010-2024)
+Raw OHLC Data (e.g., BTC 2014-2024)
          │
          ▼
 ┌─────────────────────────────┐
@@ -716,20 +749,26 @@ This section explains the complete training pipeline from data splitting to fina
 We use **temporal splitting** to prevent look-ahead bias - a critical requirement for financial time series:
 
 ```
-Timeline: 2010 ─────────────────────────────────────────────► 2024
+Daily data (year-based splitting):
+
+Timeline: 2014 ─────────────────────────────────────────────► 2024
 
           │◄────── TRAIN ──────►│◄─ VAL ─►│◄──── TEST ────►│
-          │      2010-2021      │  2022   │   2023-2024    │
-          │       12 years      │ 1 year  │    2 years     │
+          │      2014-2021      │  2022   │   2023-2024    │
+          │       7+ years      │ 1 year  │    2 years     │
+
+Hourly/4-hourly data uses ratio-based splitting (70/10/20) instead of year boundaries.
 ```
 
 **Key Implementation Details:**
 
-| Split | Years | Purpose | Normalization |
-|-------|-------|---------|---------------|
-| Train | 2010-2021 | Model learning | Stats computed here |
+| Split | Years (Daily BTC) | Purpose | Normalization |
+|-------|-------------------|---------|---------------|
+| Train | 2014-2021 | Model learning | Stats computed here |
 | Validation | 2022 | Early stopping & hyperparameter tuning | Uses train stats |
 | Test | 2023-2024 | Final unbiased evaluation | Uses train stats |
+
+For hourly/4-hourly data, ratio-based splitting (70/10/20) is used instead of year boundaries.
 
 **Critical:** Normalization statistics (mean, std) are computed from training data **only**. This prevents data leakage from validation/test sets.
 
@@ -874,8 +913,8 @@ After training completes, the **best checkpoint** is loaded and evaluated on the
 │                                                            │
 │  4. Compute evaluation metrics:                            │
 │     ├── MAPE (Mean Absolute Percentage Error)              │
-│     ├── Directional Accuracy                               │
-│     └── Sharpe Ratio                                       │
+│     ├── Directional Accuracy (binary & 3-class)            │
+│     └── Sharpe Ratio (binary & 3-class)                    │
 │                                                            │
 └────────────────────────────────────────────────────────────┘
 ```
@@ -886,9 +925,11 @@ After training completes, the **best checkpoint** is loaded and evaluated on the
 |--------|---------|----------------|
 | MAPE | `mean(\|target - pred\| / \|target\|) × 100` | Scale-independent percentage error |
 | Directional Accuracy | `% where sign(pred - prev) == sign(target - prev)` | Did we predict up/down correctly? |
+| Directional Accuracy 3-class | `% where class(pred) == class(target)` (UP/FLAT/DOWN) | Accounts for small "flat" moves |
 | Sharpe Ratio | `mean(strategy_returns) / std(strategy_returns)` | Risk-adjusted trading performance |
+| Sharpe Ratio 3-class | Same, but no position in FLAT zone | Avoids trading noise |
 
-**Directional Accuracy:**
+**Directional Accuracy (Binary):**
 ```python
 # Compare predicted vs actual DIRECTION relative to previous day
 pred_direction = sign(pred - prev)      # Did model predict up or down?
@@ -896,13 +937,35 @@ target_direction = sign(target - prev)  # Did price actually go up or down?
 accuracy = (pred_direction == target_direction).mean() * 100
 ```
 
-**Sharpe Ratio (Trading Strategy):**
+**Directional Accuracy (3-class):**
+```python
+# Classify returns into UP (+1), FLAT (0), DOWN (-1)
+# flat_threshold = flat_threshold_fraction * training_return_std (default: 0.5)
+pred_return = (pred - prev) / (abs(prev) + 1e-8)
+target_return = (target - prev) / (abs(prev) + 1e-8)
+
+# UP if return > threshold, DOWN if < -threshold, FLAT otherwise
+pred_class = classify(pred_return, flat_threshold)
+target_class = classify(target_return, flat_threshold)
+accuracy = (pred_class == target_class).mean() * 100
+```
+
+**Sharpe Ratio (Binary Trading Strategy):**
 ```python
 # Strategy: Long when predicted direction is up, short when down
 actual_returns = (target - prev) / prev
 pred_direction = sign(pred - prev)
 strategy_returns = pred_direction * actual_returns
 sharpe = mean(strategy_returns) / std(strategy_returns)
+```
+
+**Sharpe Ratio (3-class Trading Strategy):**
+```python
+# Strategy: Long when UP, short when DOWN, no position when FLAT
+# Only active (non-FLAT) periods contribute to Sharpe computation
+position = classify(pred_return, flat_threshold)  # +1, 0, or -1
+active_returns = position[active] * actual_returns[active]
+sharpe = mean(active_returns) / std(active_returns)
 ```
 
 ---
