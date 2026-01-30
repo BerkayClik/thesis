@@ -10,17 +10,20 @@ A technical guide for CS students explaining the neural network architectures in
 2. [The Problem We're Solving](#the-problem-were-solving)
 3. [Background: LSTM Networks](#background-lstm-networks)
 4. [Background: Quaternions](#background-quaternions)
-5. [Model 1: Real LSTM (Baseline)](#model-1-real-lstm-baseline)
-6. [Model 2: Real LSTM + Attention](#model-2-real-lstm--attention)
-7. [Model 3: Quaternion LSTM](#model-3-quaternion-lstm)
-8. [Model 4: Quaternion LSTM + Attention](#model-4-quaternion-lstm--attention)
-9. [Comparison Summary](#comparison-summary)
-   - [4 Model Architectures](#4-model-architectures)
-   - [7 Experimental Variants](#7-experimental-variants)
-   - [Parameter Count Comparison](#parameter-count-comparison)
-10. [Data Flow Diagram](#data-flow-diagram-complete)
-11. [Training, Validation, and Testing](#training-validation-and-testing)
+5. [RevIN: Reversible Instance Normalization](#revin-reversible-instance-normalization)
+6. [Model 1: Real LSTM (Baseline)](#model-1-real-lstm-baseline)
+7. [Model 2: Real LSTM + Attention](#model-2-real-lstm--attention)
+8. [Model 3: Quaternion LSTM](#model-3-quaternion-lstm)
+9. [Model 4: Quaternion LSTM + Attention](#model-4-quaternion-lstm--attention)
+10. [Comparison Summary](#comparison-summary)
+    - [4 Model Architectures](#4-model-architectures)
+    - [7 Experimental Variants](#7-experimental-variants)
+    - [Parameter Count Comparison](#parameter-count-comparison)
+11. [Data Flow Diagram](#data-flow-diagram-complete)
+12. [Training, Validation, and Testing](#training-validation-and-testing)
     - [Data Splitting Strategy](#data-splitting-strategy)
+    - [Preprocessing Pipeline Order](#preprocessing-pipeline-order)
+    - [Sliding Window Creation](#sliding-window-creation)
     - [Phase 1: Training](#phase-1-training)
     - [Phase 2: Validation](#phase-2-validation)
     - [Phase 3: Testing](#phase-3-testing)
@@ -161,13 +164,100 @@ def hamilton_product(p, q):
 
 Key insight: This mixes all 4 components together, capturing cross-feature interactions that element-wise operations would miss.
 
+### Matrix Formulation
+
+The Hamilton product can be expressed as a matrix-vector multiplication, which is how our implementation computes it efficiently on GPU:
+
+```
+[r]   [a  -b  -c  -d] [e]
+[i] = [b   a  -d   c] [f]
+[j]   [c   d   a  -b] [g]
+[k]   [d  -c   b   a] [h]
+```
+
+**File:** `src/models/quaternion_ops.py`
+
+---
+
+## RevIN: Reversible Instance Normalization
+
+**File:** `src/models/revin.py`
+
+All models use **RevIN** (Reversible Instance Normalization) to handle the non-stationary nature of financial time series. Instead of applying static Z-score normalization during preprocessing, RevIN normalizes each input window independently inside the model and reverses the transformation on the output.
+
+### Why RevIN?
+
+Financial time series exhibit **distribution shift** — the price distribution changes over time. A model trained on 2014–2021 data sees different price scales than 2023–2024 test data. Static Z-score normalization computed from training data becomes stale. RevIN solves this by normalizing each window using its own statistics.
+
+### How RevIN Works
+
+```
+Input window: (batch, seq_len, 4) — raw OHLC prices
+    │
+    ▼ Normalize
+Compute per-instance mean/std over seq_len dimension:
+    mean: (batch, 1, 4)
+    std:  (batch, 1, 4)
+    │
+    ▼
+x_norm = (x - mean) / std
+    │
+    ▼ Optional learned affine
+x_norm = x_norm * gamma + beta    (gamma, beta: learnable per-feature)
+    │
+    ▼ [Model processes normalized data]
+    │
+    ▼ Denormalize scalar output
+    │  (reverses affine, restores original scale for Close price)
+    │
+Output: predicted Close price in original price scale
+```
+
+### Key Implementation Details
+
+```python
+class RevIN(nn.Module):
+    def __init__(self, num_features: int, eps: float = 1e-5, affine: bool = True):
+        # Learnable per-feature scale and shift
+        self.gamma = nn.Parameter(torch.ones(num_features))   # 4 params
+        self.beta = nn.Parameter(torch.zeros(num_features))   # 4 params
+
+    def _normalize(self, x):
+        # x: (batch, seq_len, features)
+        self._mean = x.mean(dim=1, keepdim=True).detach()    # (batch, 1, features)
+        self._std = sqrt(x.var(dim=1, keepdim=True) + eps).detach()
+        out = (x - self._mean) / self._std
+        if self.affine:
+            out = out * self.gamma + self.beta
+        return out
+
+    def denorm_scalar(self, x, feature_idx):
+        # x: (batch, 1) — e.g., predicted Close price
+        # Undo affine, then restore scale for that feature
+        feat_mean = self._mean[:, 0, feature_idx]
+        feat_std = self._std[:, 0, feature_idx]
+        if self.affine:
+            x = (x - self.beta[feature_idx]) / self.gamma[feature_idx]
+        return x * feat_std + feat_mean
+```
+
+### Key Properties
+
+- Normalizes each input window by its own mean/std (instance normalization)
+- Learns optional per-feature affine parameters (scale and shift)
+- Reverses normalization on model output to produce original-scale predictions
+- Eliminates the need for global normalization statistics at preprocessing time
+- Statistics are `.detach()`ed — no gradient flows through normalization stats
+
+Inspired by: Kim et al., "Reversible Instance Normalization for Accurate Time-Series Forecasting against Distribution Shift", ICLR 2022. Reimplemented independently; no code copied from external repositories.
+
 ---
 
 ## Model 1: Real LSTM (Baseline)
 
 **File:** `src/models/real_lstm.py`
 
-This is the simplest model - a standard PyTorch LSTM.
+This is the simplest model — a standard PyTorch LSTM wrapped with RevIN.
 
 ### Architecture
 
@@ -176,38 +266,58 @@ Input: (batch, 20, 4)
          │
          ▼
     ┌─────────┐
+    │  RevIN   │  Instance normalization
+    │  (norm)  │
+    └────┬────┘
+         │ (batch, 20, 4) — normalized
+         ▼
+    ┌─────────┐
     │  LSTM   │  PyTorch's nn.LSTM
     │ layers  │  hidden_size=64, num_layers=2
     └────┬────┘
          │ Output: (batch, 20, 64)
          │
          ▼ Take last time step
+    (batch, 64)
+         │
+         ▼
     ┌─────────┐
     │ Linear  │  64 → 1
     └────┬────┘
+         │ (batch, 1) — normalized scale
+         ▼
+    ┌─────────┐
+    │  RevIN   │  Scalar denormalization (Close price)
+    │ (denorm) │
+    └────┬────┘
          │
          ▼
-Output: (batch, 1)
+Output: (batch, 1) — original price scale
 ```
 
 ### Key Code
 
 ```python
 class RealLSTM(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, dropout):
+    def __init__(self, input_size, hidden_size, num_layers, dropout,
+                 num_features=4, target_col=3):
+        self.revin = RevIN(num_features)
         self.lstm = nn.LSTM(
             input_size=input_size,      # 4 (OHLC)
             hidden_size=hidden_size,    # 64
             num_layers=num_layers,      # 2
             batch_first=True,
-            dropout=dropout
+            dropout=dropout if num_layers > 1 else 0.0
         )
         self.output_head = nn.Linear(hidden_size, 1)
 
     def forward(self, x):
-        lstm_out, _ = self.lstm(x)      # (batch, 20, 64)
-        last_out = lstm_out[:, -1, :]   # (batch, 64) - last timestep
-        return self.output_head(last_out)  # (batch, 1)
+        x = self.revin(x, 'norm')           # Instance normalization
+        lstm_out, _ = self.lstm(x)           # (batch, 20, 64)
+        last_out = lstm_out[:, -1, :]        # (batch, 64) - last timestep
+        output = self.output_head(last_out)  # (batch, 1)
+        output = self.revin.denorm_scalar(output, self.target_col)
+        return output                        # (batch, 1) original scale
 ```
 
 ### Limitation
@@ -240,12 +350,14 @@ Day 20: h_20 ────── 0.35 ─────┘
 
 ### Attention Mechanism
 
+**File:** `src/models/attention.py`
+
 ```python
 class TemporalAttention(nn.Module):
     def __init__(self, hidden_size):
         self.attention = nn.Linear(hidden_size, 1)  # Learns importance
 
-    def forward(self, x):
+    def forward(self, x, return_weights=False):
         # x: (batch, seq_len, hidden_size)
 
         # Score each time step
@@ -260,13 +372,19 @@ class TemporalAttention(nn.Module):
             x                       # (batch, seq_len, hidden)
         ).squeeze(1)               # (batch, hidden)
 
-        return context
+        return context  # optionally also returns weights
 ```
 
 ### Architecture
 
 ```
 Input: (batch, 20, 4)
+         │
+         ▼
+    ┌─────────┐
+    │  RevIN   │  Instance normalization
+    │  (norm)  │
+    └────┬────┘
          │
          ▼
     ┌─────────┐
@@ -280,11 +398,17 @@ Input: (batch, 20, 4)
          │ (batch, 64) - weighted combination
          ▼
     ┌─────────┐
-    │ Linear  │
+    │ Linear  │  64 → 1
     └────┬────┘
          │
          ▼
-Output: (batch, 1)
+    ┌─────────┐
+    │  RevIN   │  Scalar denormalization
+    │ (denorm) │
+    └────┬────┘
+         │
+         ▼
+Output: (batch, 1) — original price scale
 ```
 
 ### Advantage
@@ -313,7 +437,7 @@ raw_input: (batch, seq_len, 4)      # OHLC features
 q_input:   (batch, seq_len, 1, 4)   # 1 quaternion feature with 4 components
 ```
 
-This is why `QNNAttentionModel` uses `input_size=1` when instantiating the QuaternionLSTM.
+This is why `QuaternionLSTMNoAttention` uses `input_size=1` when instantiating the QuaternionLSTM.
 
 ### Key Difference: Quaternion Linear Layer
 
@@ -328,6 +452,8 @@ output = hamilton_product(W, x) + b  # Hamilton product
 ```
 
 ### Quaternion Linear Layer
+
+**File:** `src/models/quaternion_ops.py`
 
 The `QuaternionLinear` layer uses an **optimized matmul-based** implementation of the Hamilton product. Instead of broadcasting element-wise quaternion multiplications, it concatenates quaternion components and performs 4 standard matrix multiplications (leveraging cuBLAS):
 
@@ -408,12 +534,16 @@ class QuaternionLSTMCell(nn.Module):
 
 - **Fused gates:** A single `QuaternionLinear(input_size, 4 * hidden_size)` computes all 4 gate projections at once, reducing kernel launches from 8 to 2.
 - **Element-wise state updates:** The cell state update uses standard element-wise `f * c + i * g` rather than `hamilton_product(f, c) + hamilton_product(i, g)`. The quaternion structure is captured in the weight matrices (via `QuaternionLinear`), while gating preserves the LSTM cell state as a linear memory highway.
+- **Pre-computed input projections:** The stacked `QuaternionLSTM` pre-computes input projections for the first layer across all timesteps at once, then uses `forward_with_precomputed()` in the time loop to avoid redundant computation.
 - **No LayerNorm:** Gate outputs are naturally bounded by sigmoid [0,1] and tanh [-1,1], and gradient clipping handles stability.
 
 ### Shape Flow
 
 ```
 Input: (batch, 20, 4)
+         │
+         ▼ RevIN normalize
+    (batch, 20, 4) — normalized
          │
          ▼ Add quaternion dimension
     (batch, 20, 1, 4)   # 1 quaternion feature per timestep
@@ -432,12 +562,17 @@ Input: (batch, 20, 4)
     (batch, hidden_size * 4)
            │
            ▼
-    ┌─────────┐
-    │ Linear  │  hidden*4 → hidden → 1
-    └────┬────┘
+    ┌──────────┐
+    │Projection│  hidden*4 → hidden
+    └────┬─────┘
          │
          ▼
-Output: (batch, 1)
+    ┌─────────┐
+    │ Linear  │  hidden → 1
+    └────┬────┘
+         │
+         ▼ RevIN denormalize (scalar)
+Output: (batch, 1) — original price scale
 ```
 
 ### Why This Might Work Better
@@ -516,10 +651,31 @@ Combines both innovations: quaternion operations AND attention.
 - **Quaternion space:** Captures OHLC feature correlations via Hamilton product
 - **Real-valued attention:** Learns temporal importance (which days matter)
 
+### Class Hierarchy
+
+Both quaternion models share a common base class:
+
+```python
+class QuaternionLSTMBase(nn.Module):
+    """Shared: RevIN, QLSTM backbone, projection, output head."""
+
+class QNNAttentionModel(QuaternionLSTMBase):
+    """+ TemporalAttention over projected sequence."""
+
+class QuaternionLSTMNoAttention(QuaternionLSTMBase):
+    """Uses last hidden state instead of attention (ablation)."""
+```
+
 ### Architecture
 
 ```
 Input: (batch, 20, 4)
+         │
+         ▼
+    ┌─────────┐
+    │  RevIN   │  Instance normalization
+    │  (norm)  │
+    └────┬────┘
          │
          ▼ Quaternion encoding
     (batch, 20, 1, 4)
@@ -552,46 +708,50 @@ Input: (batch, 20, 4)
     └──────┬───────┘
            │
            ▼
-Output: (batch, 1)
+    ┌──────────────┐
+    │    RevIN     │  Scalar denormalization
+    │   (denorm)   │
+    └──────┬───────┘
+           │
+           ▼
+Output: (batch, 1) — original price scale
 ```
 
 ### Key Code
 
 ```python
-class QNNAttentionModel(nn.Module):
-    def __init__(self, hidden_size, num_layers, dropout):
-        self.qlstm = QuaternionLSTM(
-            input_size=1,        # 1 quaternion feature
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            dropout=dropout
-        )
-
-        # Quaternion → Real projection
-        self.projection = nn.Linear(hidden_size * 4, hidden_size)
-
-        # Attention in real space
+class QNNAttentionModel(QuaternionLSTMBase):
+    def __init__(self, hidden_size, num_layers, dropout,
+                 input_size=1, num_features=4, target_col=3):
+        super().__init__(hidden_size, num_layers, dropout,
+                         input_size, num_features, target_col)
         self.attention = TemporalAttention(hidden_size)
 
-        # Single linear output (matches Real LSTM simplicity)
-        self.output_head = nn.Linear(hidden_size, 1)
+    def forward(self, x, return_attention=False):
+        # Instance normalization
+        x = self.revin(x, 'norm')
 
-    def forward(self, x):
+        batch_size, seq_len, _ = x.size()
+
         # Quaternion encoding
-        q_input = x.unsqueeze(2)  # (batch, 20, 1, 4)
+        q_input = self.encode_quaternion(x)     # (batch, 20, 1, 4)
 
         # Quaternion LSTM
-        qlstm_out, _ = self.qlstm(q_input)  # (batch, 20, hidden, 4)
+        qlstm_out, _ = self.qlstm(q_input)     # (batch, 20, hidden, 4)
 
         # Flatten and project to real space
-        qlstm_flat = qlstm_out.view(batch, 20, -1)  # (batch, 20, hidden*4)
-        projected = self.projection(qlstm_flat)     # (batch, 20, hidden)
+        qlstm_flat = qlstm_out.view(batch_size, seq_len, -1)  # (batch, 20, hidden*4)
+        projected = self.projection(qlstm_flat)                # (batch, 20, hidden)
 
         # Attention over time
         context = self.attention(projected)  # (batch, hidden)
 
         # Final prediction
-        return self.output_head(context)  # (batch, 1)
+        output = self.output_head(context)   # (batch, 1)
+
+        # Reverse normalization to original scale
+        output = self.revin.denorm_scalar(output, self.target_col)
+        return output
 ```
 
 ---
@@ -607,6 +767,8 @@ class QNNAttentionModel(nn.Module):
 | Quaternion LSTM | Single quaternion | Hamilton product LSTM | Last timestep |
 | **Quaternion LSTM + Attention** | Single quaternion | Hamilton product LSTM | Learned weights |
 
+All models use RevIN for per-instance normalization and denormalization.
+
 ### 7 Experimental Variants
 
 We run **7 variants** in experiments. This includes a naive baseline plus 6 model variants. Quaternion models have ~3-4x more parameters at the same hidden size, so we test them in two configurations for fair comparison:
@@ -616,34 +778,39 @@ We run **7 variants** in experiments. This includes a naive baseline plus 6 mode
 | 0 | `naive_zero` | Persistence (last close) | N/A | Naive baseline (no learning) |
 | 1 | `real_lstm` | Real LSTM | 64 | Baseline |
 | 2 | `real_lstm_attention` | Real LSTM + Attention | 64 | Baseline |
-| 3 | `quaternion_lstm` | Quaternion LSTM | 64 | Layer-matched |
-| 4 | `quaternion_lstm_attention` | Quaternion LSTM + Attention | 64 | Layer-matched |
-| 5 | `quaternion_lstm_param_matched` | Quaternion LSTM | 32 | Parameter-matched |
-| 6 | `quaternion_lstm_attention_param_matched` | Quaternion LSTM + Attention | 32 | Parameter-matched |
+| 3 | `quaternion_lstm_param_matched` | Quaternion LSTM | 32 | Parameter-matched |
+| 4 | `quaternion_lstm_attention_param_matched` | Quaternion LSTM + Attention | 32 | Parameter-matched |
+| 5 | `quaternion_lstm` | Quaternion LSTM | 64 | Layer-matched |
+| 6 | `quaternion_lstm_attention` | Quaternion LSTM + Attention | 64 | Layer-matched |
 
 **Naive baseline:** A persistence model that predicts the last observed close price as the next value (random walk hypothesis). Establishes that models are learning something meaningful beyond simple persistence.
 
-**Layer-matched (hidden=64):** Same architecture depth as real LSTM, but quaternion has more parameters. Tests if quaternion math itself helps.
+**Parameter-matched (hidden=32):** Reduced hidden size so parameter count approximately matches real LSTM (~51K). Tests if improvements come from quaternion math or just having more parameters. **This is the primary comparison.**
 
-**Parameter-matched (hidden=32):** Reduced hidden size so parameter count matches real LSTM (~51K). Tests if improvements come from quaternion math or just having more parameters.
+**Layer-matched (hidden=64):** Same architecture depth as real LSTM, but quaternion has more parameters. Tests if quaternion math itself helps. Included for completeness.
 
 ### Parameter Count Comparison
 
-**Layer-matched (hidden_size=64):**
+**Baseline models (hidden_size=64):**
 
 | Model | Approximate Parameters |
 |-------|----------------------|
 | Real LSTM | ~51K |
 | Real LSTM + Attention | ~51K |
-| Quaternion LSTM | ~174K |
-| Quaternion LSTM + Attention | ~179K |
 
 **Parameter-matched (hidden_size=32):**
 
 | Model | Approximate Parameters |
 |-------|----------------------|
-| Quaternion LSTM (param-matched) | ~51K |
-| Quaternion LSTM + Attention (param-matched) | ~53K |
+| Quaternion LSTM (param-matched) | ~56K |
+| Quaternion LSTM + Attention (param-matched) | ~57K |
+
+**Layer-matched (hidden_size=64):**
+
+| Model | Approximate Parameters |
+|-------|----------------------|
+| Quaternion LSTM | ~174K |
+| Quaternion LSTM + Attention | ~179K |
 
 Quaternion models have more parameters because each weight is 4D instead of 1D.
 
@@ -654,8 +821,8 @@ Quaternion models have more parameters because each weight is 4D instead of 1D.
 Quaternion models include an additional projection layer that Real models don't have:
 
 ```
-Quaternion: QLSTM → Flatten(hidden*4) → Projection(hidden*4 → hidden) → Linear(hidden → 1)
-Real:       LSTM  → Last timestep(hidden) → Linear(hidden → 1)
+Quaternion: RevIN → QLSTM → Flatten(hidden*4) → Projection(hidden*4 → hidden) → Linear(hidden → 1) → RevIN denorm
+Real:       RevIN → LSTM  → Last timestep(hidden) → Linear(hidden → 1) → RevIN denorm
 ```
 
 **Output Head:** Both Real and Quaternion models use the same single `Linear(hidden → 1)` output layer. The projection layer in Quaternion models transforms the flattened quaternion output (hidden*4) back to real space (hidden) before the output head.
@@ -667,7 +834,7 @@ The research question: **Does quaternion encoding help predict stock prices?**
 - Compare all models vs naive_zero → Verify models learn meaningful patterns
 - Compare Real LSTM vs Quaternion LSTM → Effect of quaternion encoding
 - Compare without attention vs with attention → Effect of temporal attention
-- Compare layer-matched vs parameter-matched → Is it the math or just more parameters?
+- Compare parameter-matched vs layer-matched → Is it the math or just more parameters?
 - Compare all 7 → Find the best combination
 
 ---
@@ -675,13 +842,18 @@ The research question: **Does quaternion encoding help predict stock prices?**
 ## Data Flow Diagram (Complete)
 
 ```
-Raw OHLC Data (e.g., BTC 2014-2024)
+Raw OHLC Data (e.g., BTC-USD from Yahoo Finance)
          │
          ▼
 ┌─────────────────────────────┐
 │      Preprocessing          │
 │  1. Temporal split (raw)    │
-│  2. Sliding windows         │
+│  2. Compute return_std      │
+│     (training set only,     │
+│      for 3-class threshold) │
+│  3. Quaternion encoding     │
+│     (semantic identity)     │
+│  4. Sliding windows         │
 │  (No Z-score — RevIN inside │
 │   models handles this)      │
 └──────────┬──────────────────┘
@@ -696,7 +868,7 @@ Raw OHLC Data (e.g., BTC 2014-2024)
 Real Models   Quaternion Models
     │             │
     ▼             ▼
-  RevIN norm    RevIN norm        ← Instance normalization
+  RevIN norm    RevIN norm        ← Per-instance normalization
     │             │
     │        unsqueeze(2)
     │             │
@@ -738,8 +910,8 @@ Last step    Attention
       (batch, 1)
            │
            ▼
-    RevIN denorm              ← Restores original price scale
-           │
+    RevIN denorm_scalar       ← Restores original price scale
+           │                     (uses stored mean/std for Close)
            ▼
    Predicted Close Price
       (original scale)
@@ -753,33 +925,36 @@ This section explains the complete training pipeline from data splitting to fina
 
 ### Data Splitting Strategy
 
-We use **temporal splitting** to prevent look-ahead bias - a critical requirement for financial time series:
+We use **temporal splitting** to prevent look-ahead bias — a critical requirement for financial time series:
 
+**Year-based splitting** (for daily data with long history, e.g., S&P 500):
 ```
-Daily data (year-based splitting):
-
-Timeline: 2014 ─────────────────────────────────────────────► 2024
+Timeline: 2000 ─────────────────────────────────────────────► 2024
 
           │◄────── TRAIN ──────►│◄─ VAL ─►│◄──── TEST ────►│
-          │      2014-2021      │  2022   │   2023-2024    │
-          │       7+ years      │ 1 year  │    2 years     │
+          │      ≤ train_end    │  middle  │   > val_end    │
+```
 
-Hourly/4-hourly data uses ratio-based splitting (70/10/20) instead of year boundaries.
+**Ratio-based splitting** (for shorter datasets or intraday data, e.g., BTC):
+```
+Timeline: start ─────────────────────────────────────────► end
+
+          │◄─── TRAIN (70%) ──►│◄ VAL (10%) ►│◄ TEST (20%) ►│
 ```
 
 **Key Implementation Details:**
 
-| Split | Years (Daily BTC) | Purpose | Normalization |
-|-------|-------------------|---------|---------------|
-| Train | 2014-2021 | Model learning | RevIN (per-window) |
-| Validation | 2022 | Early stopping & hyperparameter tuning | RevIN (per-window) |
-| Test | 2023-2024 | Final unbiased evaluation | RevIN (per-window) |
+| Split | Purpose | Normalization |
+|-------|---------|---------------|
+| Train | Model learning | RevIN (per-window) |
+| Validation | Early stopping & LR scheduling | RevIN (per-window) |
+| Test | Final unbiased evaluation | RevIN (per-window) |
 
-For hourly/4-hourly data, ratio-based splitting (70/10/20) is used instead of year boundaries.
-
-**Critical:** RevIN normalizes each window independently using its own statistics, so there is no cross-sample leakage. Training return statistics (return_std) are still computed from training data only for the 3-class evaluation threshold.
+**Critical:** RevIN normalizes each window independently using its own statistics, so there is no cross-sample leakage. Training return statistics (return_std) are computed from training data only for the 3-class evaluation threshold.
 
 ### Preprocessing Pipeline Order
+
+**File:** `src/data/preprocessing.py`
 
 ```python
 # Step 1: Temporal split (on RAW data)
@@ -789,36 +964,15 @@ train_raw, val_raw, test_raw = temporal_split(raw_data, dates)
 train_returns = compute_returns(train_raw[:, 3])  # Close column
 norm_stats = {'return_std': train_returns.std()}
 
-# Step 3: Create sliding window datasets (raw OHLC, no Z-score)
-dataset = SP500Dataset(train_raw, window_size=20)
+# Step 3: Quaternion encoding (semantic transformation — identity mapping)
+train_data = encode_quaternion(train_raw)  # Same data, marked as quaternion
 
-# Normalization is handled inside each model by RevIN (see below)
+# Normalization is handled inside each model by RevIN (see above)
 ```
 
-### RevIN: Reversible Instance Normalization
-
-Normalization is performed **inside each model** using RevIN rather than as
-a static preprocessing step. RevIN computes per-instance (per-window) mean
-and standard deviation at the input, normalizes, and reverses the
-transformation on the model output to restore the original price scale.
-
-This approach addresses **distribution shift** -- the non-stationary nature
-of financial time series where the price distribution changes over time.
-Static Z-score normalization computed from training data can become stale for
-test data from a different time period. RevIN normalizes each window
-independently, making the model invariant to the local scale and offset.
-
-Key properties:
-- Normalizes each input window by its own mean/std (instance normalization)
-- Learns optional per-feature affine parameters (scale and shift)
-- Reverses normalization on model output to produce original-scale predictions
-- Eliminates the need for global normalization statistics at preprocessing time
-
-Inspired by: Kim et al., "Reversible Instance Normalization for Accurate
-Time-Series Forecasting against Distribution Shift", ICLR 2022.
-Reimplemented independently; no code copied from external repositories.
-
 ### Sliding Window Creation
+
+**File:** `src/data/dataset.py`
 
 Data is converted to supervised learning format:
 
@@ -828,6 +982,21 @@ Target (y): Next-day raw Close price
 
 Day:    1   2   3  ...  19  20  │ 21
         └─── X (raw OHLC) ─────┘  └── y = Close₂₁
+```
+
+```python
+class SP500Dataset(Dataset):
+    def __init__(self, data, window_size, target_col=3):
+        self.data = data           # (num_samples, 4) raw OHLC
+        self.window_size = window_size
+
+    def __len__(self):
+        return len(self.data) - self.window_size
+
+    def __getitem__(self, idx):
+        x = self.data[idx:idx + self.window_size]       # (window_size, 4)
+        y = self.data[idx + self.window_size, target_col]  # scalar
+        return x, y
 ```
 
 ---
@@ -848,6 +1017,12 @@ The training loop processes batches with gradient updates:
 │      ▼                                                      │
 │  ┌─────────────┐                                           │
 │  │ Forward Pass │  pred = model(x)                         │
+│  └──────┬──────┘  (includes RevIN norm + denorm)           │
+│         │                                                   │
+│         ▼                                                   │
+│  ┌─────────────┐                                           │
+│  │ NaN/Inf     │  Skip batch if detected                   │
+│  │   Check     │                                           │
 │  └──────┬──────┘                                           │
 │         │                                                   │
 │         ▼                                                   │
@@ -878,10 +1053,12 @@ The training loop processes batches with gradient updates:
 | Component | Configuration | Purpose |
 |-----------|--------------|---------|
 | Loss Function | MSE | Penalizes prediction errors |
-| Optimizer | Adam (lr=0.001) | Adaptive learning rate |
+| Optimizer | Adam (lr=0.001 real, 0.0001 quaternion) | Adaptive learning rate |
 | Gradient Clipping | max_norm=1.0 | Prevents gradient explosion |
 | Batch Size | 32 | Memory vs. convergence balance |
-| LR Scheduler | ReduceLROnPlateau | Reduce LR by 0.5× on plateau |
+| LR Scheduler | ReduceLROnPlateau | Reduce LR by 0.5x on plateau (patience=5) |
+
+**Note:** Quaternion models use a lower default learning rate (0.0001) specified per-variant in the experiment config.
 
 ---
 
@@ -918,7 +1095,8 @@ Best model from Epoch 3 is loaded for testing.
 **Configuration:**
 - `patience = 10`: Stop if no improvement for 10 epochs
 - `max_epochs = 100`: Maximum training iterations
-- Best checkpoint saved to `checkpoints/best_model.pt`
+- Best checkpoint saved to `checkpoints/<variant>/<seed>/best_model.pt`
+- LR scheduler steps on validation loss (ReduceLROnPlateau)
 
 ---
 
@@ -937,6 +1115,7 @@ After training completes, the **best checkpoint** is loaded and evaluated on the
 │                                                            │
 │  3. Forward pass on test set (no gradients)                │
 │     └── predictions = model(test_data)                     │
+│         (models output original-scale prices via RevIN)    │
 │                                                            │
 │  4. Compute evaluation metrics:                            │
 │     ├── MAPE (Mean Absolute Percentage Error)              │
@@ -947,6 +1126,8 @@ After training completes, the **best checkpoint** is loaded and evaluated on the
 ```
 
 ### Evaluation Metrics
+
+**Files:** `src/evaluation/metrics.py`, `src/evaluation/directional_accuracy.py`, `src/evaluation/sharpe_ratio.py`
 
 | Metric | Formula | Interpretation |
 |--------|---------|----------------|
@@ -961,6 +1142,7 @@ After training completes, the **best checkpoint** is loaded and evaluated on the
 # Compare predicted vs actual DIRECTION relative to previous day
 pred_direction = sign(pred - prev)      # Did model predict up or down?
 target_direction = sign(target - prev)  # Did price actually go up or down?
+# Zero change defaults to "up" (+1)
 accuracy = (pred_direction == target_direction).mean() * 100
 ```
 
@@ -980,8 +1162,8 @@ accuracy = (pred_class == target_class).mean() * 100
 **Sharpe Ratio (Binary Trading Strategy):**
 ```python
 # Strategy: Long when predicted direction is up, short when down
-actual_returns = (target - prev) / prev
-pred_direction = sign(pred - prev)
+actual_returns = (target - prev) / (abs(prev) + 1e-8)
+pred_direction = sign(pred - prev)  # Zero defaults to +1
 strategy_returns = pred_direction * actual_returns
 sharpe = mean(strategy_returns) / std(strategy_returns)
 ```
@@ -1008,6 +1190,7 @@ sharpe = mean(active_returns) / std(active_returns)
             │  ─────────────────────────── │
             │  • Download OHLC data        │
             │  • Temporal split            │
+            │  • Compute return_std        │
             │  • Create sliding windows    │
             │  (RevIN normalizes in model) │
             └──────────────┬───────────────┘
@@ -1026,6 +1209,7 @@ sharpe = mean(active_returns) / std(active_returns)
             │     Initialize Training      │
             │  ─────────────────────────── │
             │  • Create model              │
+            │  • torch.compile (if able)   │
             │  • Setup optimizer           │
             │  • Setup LR scheduler        │
             │  • Initialize best_loss = ∞  │
@@ -1039,6 +1223,7 @@ sharpe = mean(active_returns) / std(active_returns)
          │  ┌──────────────────────────────┐ │
     ┌───►│  │      Train Epoch             │ │
     │    │  │  • Forward/backward pass     │ │
+    │    │  │  • NaN/Inf detection         │ │
     │    │  │  • Gradient clipping         │ │
     │    │  │  • Optimizer step            │ │
     │    │  └──────────────┬───────────────┘ │
@@ -1048,6 +1233,12 @@ sharpe = mean(active_returns) / std(active_returns)
     │    │  │      Validate                │ │
     │    │  │  • Forward pass (no grad)    │ │
     │    │  │  • Compute val_loss          │ │
+    │    │  └──────────────┬───────────────┘ │
+    │    │                 │                  │
+    │    │                 ▼                  │
+    │    │  ┌──────────────────────────────┐ │
+    │    │  │   LR Scheduler Step          │ │
+    │    │  │  • ReduceLROnPlateau         │ │
     │    │  └──────────────┬───────────────┘ │
     │    │                 │                  │
     │    │                 ▼                  │
@@ -1078,6 +1269,8 @@ sharpe = mean(active_returns) / std(active_returns)
             │  • Compute MAPE              │
             │  • Compute Dir. Accuracy     │
             │  • Compute Sharpe Ratio      │
+            │  (all on original-scale      │
+            │   prices via RevIN)          │
             └──────────────┬───────────────┘
                            │
                            ▼
@@ -1087,6 +1280,7 @@ sharpe = mean(active_returns) / std(active_returns)
             │  • Metrics JSON              │
             │  • Training history          │
             │  • Model checkpoint          │
+            │  • Memory cleanup (gc)       │
             └──────────────────────────────┘
                            │
                            ▼
@@ -1094,6 +1288,8 @@ sharpe = mean(active_returns) / std(active_returns)
 ```
 
 ### Multi-Seed Experiments
+
+**File:** `experiments/run_experiments.py`
 
 For statistical validity, each model variant is trained with multiple random seeds:
 
@@ -1106,8 +1302,15 @@ Variant: quaternion_lstm_attention
     Mean ± Std: MAPE=2.34±0.05%, Dir=54.4±0.5%
 ```
 
+**Experiment Runner Features:**
+- **Rolling save:** Intermediate results saved after each variant completes
+- **Memory cleanup:** Models and trainers deleted between runs, `gc.collect()` + `torch.cuda.empty_cache()` to prevent OOM
+- **torch.compile:** Real LSTM models compiled for faster execution (skipped for quaternion models due to sequential time loops, and for MPS due to Metal shader limits)
+- **Per-variant learning rate:** Quaternion variants can override the base learning rate
+
 Statistical significance is computed using:
-- **Paired t-test:** Compare model vs baseline
+- **Paired t-test:** Compare model vs real_lstm baseline (when same number of seeds)
+- **Independent t-test:** Fallback when seed counts differ
 - **Cohen's d:** Effect size magnitude
 - **p-values:** Significance at 0.05 and 0.01 levels
 
@@ -1118,3 +1321,4 @@ Statistical significance is computed using:
 - [Understanding LSTM Networks](https://colah.github.io/posts/2015-08-Understanding-LSTMs/) - Colah's Blog
 - [Attention Is All You Need](https://arxiv.org/abs/1706.03762) - Original attention paper
 - [Quaternion Neural Networks](https://arxiv.org/abs/1903.08478) - Quaternion DNNs paper
+- [Reversible Instance Normalization](https://openreview.net/forum?id=cGDAkQo1C0p) - RevIN paper (ICLR 2022)
