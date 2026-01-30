@@ -6,6 +6,7 @@ Standard LSTM encoder with regression output head.
 
 import torch
 import torch.nn as nn
+from .revin import RevIN
 
 
 class RealLSTM(nn.Module):
@@ -17,6 +18,8 @@ class RealLSTM(nn.Module):
         hidden_size: Size of LSTM hidden state.
         num_layers: Number of stacked LSTM layers.
         dropout: Dropout rate between LSTM layers.
+        num_features: Number of features for RevIN normalization.
+        target_col: Index of target feature for scalar denormalization.
     """
 
     def __init__(
@@ -24,11 +27,16 @@ class RealLSTM(nn.Module):
         input_size: int,
         hidden_size: int,
         num_layers: int = 1,
-        dropout: float = 0.0
+        dropout: float = 0.0,
+        num_features: int = 4,
+        target_col: int = 3
     ):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
+        self.target_col = target_col
+
+        self.revin = RevIN(num_features)
 
         self.lstm = nn.LSTM(
             input_size=input_size,
@@ -48,8 +56,11 @@ class RealLSTM(nn.Module):
             x: Input tensor of shape (batch, seq_len, input_size).
 
         Returns:
-            Predictions of shape (batch, 1).
+            Predictions of shape (batch, 1) in original price scale.
         """
+        # Instance normalization
+        x = self.revin(x, 'norm')
+
         # lstm_out: (batch, seq_len, hidden_size)
         lstm_out, _ = self.lstm(x)
 
@@ -58,4 +69,7 @@ class RealLSTM(nn.Module):
 
         # Regression output
         output = self.output_head(last_out)
+
+        # Reverse normalization to original scale
+        output = self.revin.denorm_scalar(output, self.target_col)
         return output

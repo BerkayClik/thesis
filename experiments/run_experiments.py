@@ -132,44 +132,37 @@ def create_model(model_type: str, hidden_size: int, num_layers: int, dropout: fl
             input_size=4,
             hidden_size=hidden_size,
             num_layers=num_layers,
-            dropout=dropout
+            dropout=dropout,
+            num_features=4,
+            target_col=3
         )
     elif model_type == "real_lstm_attention":
         return RealLSTMAttention(
             input_size=4,
             hidden_size=hidden_size,
             num_layers=num_layers,
-            dropout=dropout
+            dropout=dropout,
+            num_features=4,
+            target_col=3
         )
     elif model_type == "quaternion_lstm":
         return QuaternionLSTMNoAttention(
             hidden_size=hidden_size,
             num_layers=num_layers,
-            dropout=dropout
+            dropout=dropout,
+            num_features=4,
+            target_col=3
         )
     elif model_type == "quaternion_lstm_attention":
         return QNNAttentionModel(
             hidden_size=hidden_size,
             num_layers=num_layers,
-            dropout=dropout
+            dropout=dropout,
+            num_features=4,
+            target_col=3
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
-
-
-def denormalize(x: torch.Tensor, stats: Dict, col: int = 3) -> torch.Tensor:
-    """
-    Denormalize data using stored statistics.
-
-    Args:
-        x: Normalized tensor.
-        stats: Dict with 'mean' and 'std' tensors.
-        col: Column index for single-feature denormalization (default: 3 for Close).
-
-    Returns:
-        Denormalized tensor.
-    """
-    return x * stats['std'][col] + stats['mean'][col]
 
 
 def compute_statistical_significance(
@@ -252,13 +245,15 @@ def evaluate_model(
 
     Returns dict with MAPE, directional accuracy (binary and 3-class),
     and Sharpe ratio (binary and 3-class).
-    All metrics are computed on denormalized (original scale) prices.
+    All metrics are computed on original-scale prices. Models with RevIN
+    output predictions in original price scale directly; the naive baseline
+    also operates on raw prices since preprocessing no longer normalizes.
 
     Args:
         model: The model to evaluate.
         dataloader: DataLoader for the evaluation dataset.
         device: Compute device.
-        norm_stats: Normalization statistics for denormalization.
+        norm_stats: Dict with 'return_std' for flat threshold computation.
         flat_threshold_fraction: Fraction of training return_std for FLAT zone (default: 0.5).
     """
     model.eval()
@@ -275,7 +270,7 @@ def evaluate_model(
                 pred = pred.squeeze(-1)  # Only squeeze last dim to preserve batch
             if pred.dim() == 0:
                 pred = pred.unsqueeze(0)  # Handle single-sample batch
-            prev = x[:, -1, 3].cpu()  # Last close in window (normalized)
+            prev = x[:, -1, 3].cpu()  # Last close in window (raw scale)
             all_preds.append(pred)
             all_targets.append(y)
             all_prevs.append(prev)
@@ -284,35 +279,33 @@ def evaluate_model(
     targets = torch.cat(all_targets)
     prevs = torch.cat(all_prevs)
 
-    # Denormalize for evaluation
-    preds_denorm = denormalize(preds, norm_stats, col=3)
-    targets_denorm = denormalize(targets, norm_stats, col=3)
-    prevs_denorm = denormalize(prevs, norm_stats, col=3)
+    # No denormalization needed: models output original-scale prices via RevIN,
+    # and preprocessing no longer applies Z-score normalization.
 
     # Compute flat threshold from training return std
     return_std = norm_stats.get('return_std', 0.0)
     flat_threshold = flat_threshold_fraction * return_std
 
     return {
-        'mape': compute_mape(preds_denorm, targets_denorm),
+        'mape': compute_mape(preds, targets),
         'directional_accuracy': compute_directional_accuracy(
-            preds_denorm, targets_denorm, prevs_denorm
+            preds, targets, prevs
         ),
         'sharpe_ratio': compute_sharpe_ratio(
-            preds_denorm, targets_denorm, prevs_denorm
+            preds, targets, prevs
         ),
         'directional_accuracy_3class': compute_directional_accuracy_3class(
-            preds_denorm, targets_denorm, prevs_denorm, flat_threshold=flat_threshold
+            preds, targets, prevs, flat_threshold=flat_threshold
         ),
         'sharpe_ratio_3class': compute_sharpe_ratio_3class(
-            preds_denorm, targets_denorm, prevs_denorm, flat_threshold=flat_threshold
+            preds, targets, prevs, flat_threshold=flat_threshold
         ),
         'flat_threshold': flat_threshold,
         'return_std': return_std,
         # Store predictions for visualization
-        'predictions': preds_denorm.numpy().tolist(),
-        'targets': targets_denorm.numpy().tolist(),
-        'prev_closes': prevs_denorm.numpy().tolist()
+        'predictions': preds.numpy().tolist(),
+        'targets': targets.numpy().tolist(),
+        'prev_closes': prevs.numpy().tolist()
     }
 
 

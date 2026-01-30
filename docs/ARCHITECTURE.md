@@ -48,7 +48,7 @@ You should be familiar with:
 - Low (L) - lowest price that day
 - Close (C) - price when market closed
 
-**Output:** Predicted normalized Close price for the next day
+**Output:** Predicted Close price for the next day (original price scale)
 
 **Shape:** `(batch_size, 20, 4)` → `(batch_size, 1)`
 
@@ -681,18 +681,22 @@ Raw OHLC Data (e.g., BTC 2014-2024)
 ┌─────────────────────────────┐
 │      Preprocessing          │
 │  1. Temporal split (raw)    │
-│  2. Z-score normalize       │
-│  3. Sliding windows         │
+│  2. Sliding windows         │
+│  (No Z-score — RevIN inside │
+│   models handles this)      │
 └──────────┬──────────────────┘
            │
            ▼
-    X: (batch, 20, 4) normalized OHLC
-    y: next-day normalized Close price
+    X: (batch, 20, 4) raw OHLC
+    y: next-day raw Close price
            │
     ┌──────┴──────┐
     │             │
     ▼             ▼
 Real Models   Quaternion Models
+    │             │
+    ▼             ▼
+  RevIN norm    RevIN norm        ← Instance normalization
     │             │
     │        unsqueeze(2)
     │             │
@@ -734,8 +738,11 @@ Last step    Attention
       (batch, 1)
            │
            ▼
+    RevIN denorm              ← Restores original price scale
+           │
+           ▼
    Predicted Close Price
-        (normalized)
+      (original scale)
 ```
 
 ---
@@ -764,13 +771,13 @@ Hourly/4-hourly data uses ratio-based splitting (70/10/20) instead of year bound
 
 | Split | Years (Daily BTC) | Purpose | Normalization |
 |-------|-------------------|---------|---------------|
-| Train | 2014-2021 | Model learning | Stats computed here |
-| Validation | 2022 | Early stopping & hyperparameter tuning | Uses train stats |
-| Test | 2023-2024 | Final unbiased evaluation | Uses train stats |
+| Train | 2014-2021 | Model learning | RevIN (per-window) |
+| Validation | 2022 | Early stopping & hyperparameter tuning | RevIN (per-window) |
+| Test | 2023-2024 | Final unbiased evaluation | RevIN (per-window) |
 
 For hourly/4-hourly data, ratio-based splitting (70/10/20) is used instead of year boundaries.
 
-**Critical:** Normalization statistics (mean, std) are computed from training data **only**. This prevents data leakage from validation/test sets.
+**Critical:** RevIN normalizes each window independently using its own statistics, so there is no cross-sample leakage. Training return statistics (return_std) are still computed from training data only for the 3-class evaluation threshold.
 
 ### Preprocessing Pipeline Order
 
@@ -778,29 +785,49 @@ For hourly/4-hourly data, ratio-based splitting (70/10/20) is used instead of ye
 # Step 1: Temporal split (on RAW data)
 train_raw, val_raw, test_raw = temporal_split(raw_data, dates)
 
-# Step 2: Z-score normalize OHLC features
-# CRITICAL: Stats computed from TRAIN only to prevent data leakage
-train_mean = train_raw.mean()
-train_std = train_raw.std()
+# Step 2: Compute training return statistics (for 3-class evaluation threshold)
+train_returns = compute_returns(train_raw[:, 3])  # Close column
+norm_stats = {'return_std': train_returns.std()}
 
-train_normalized = (train_raw - train_mean) / train_std
-val_normalized = (val_raw - train_mean) / train_std    # Uses TRAIN stats
-test_normalized = (test_raw - train_mean) / train_std  # Uses TRAIN stats
+# Step 3: Create sliding window datasets (raw OHLC, no Z-score)
+dataset = SP500Dataset(train_raw, window_size=20)
 
-# Step 3: Create sliding window datasets
-dataset = SP500Dataset(train_normalized, window_size=20)
+# Normalization is handled inside each model by RevIN (see below)
 ```
+
+### RevIN: Reversible Instance Normalization
+
+Normalization is performed **inside each model** using RevIN rather than as
+a static preprocessing step. RevIN computes per-instance (per-window) mean
+and standard deviation at the input, normalizes, and reverses the
+transformation on the model output to restore the original price scale.
+
+This approach addresses **distribution shift** -- the non-stationary nature
+of financial time series where the price distribution changes over time.
+Static Z-score normalization computed from training data can become stale for
+test data from a different time period. RevIN normalizes each window
+independently, making the model invariant to the local scale and offset.
+
+Key properties:
+- Normalizes each input window by its own mean/std (instance normalization)
+- Learns optional per-feature affine parameters (scale and shift)
+- Reverses normalization on model output to produce original-scale predictions
+- Eliminates the need for global normalization statistics at preprocessing time
+
+Inspired by: Kim et al., "Reversible Instance Normalization for Accurate
+Time-Series Forecasting against Distribution Shift", ICLR 2022.
+Reimplemented independently; no code copied from external repositories.
 
 ### Sliding Window Creation
 
 Data is converted to supervised learning format:
 
 ```
-Input Window (X): 20 consecutive days of NORMALIZED OHLC
-Target (y): Next-day NORMALIZED Close price
+Input Window (X): 20 consecutive days of raw OHLC
+Target (y): Next-day raw Close price
 
 Day:    1   2   3  ...  19  20  │ 21
-        └─ X (normalized) ─────┘  └── y = NormalizedClose₂₁
+        └─── X (raw OHLC) ─────┘  └── y = Close₂₁
 ```
 
 ---
@@ -981,8 +1008,8 @@ sharpe = mean(active_returns) / std(active_returns)
             │  ─────────────────────────── │
             │  • Download OHLC data        │
             │  • Temporal split            │
-            │  • Z-score normalize         │
             │  • Create sliding windows    │
+            │  (RevIN normalizes in model) │
             └──────────────┬───────────────┘
                            │
                            ▼

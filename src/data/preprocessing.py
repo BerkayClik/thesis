@@ -175,10 +175,12 @@ def preprocess_data(
     val_end_year: int = 2021
 ) -> Dict:
     """
-    Complete preprocessing pipeline: split, normalize, encode.
+    Complete preprocessing pipeline: split, encode.
 
-    CRITICAL: Normalization statistics are computed from training data ONLY
-    to prevent look-ahead bias.
+    Normalization is now handled inside models via RevIN (Reversible Instance
+    Normalization), which normalizes each input window independently at
+    inference time. This eliminates static Z-score normalization and the
+    associated look-ahead bias concern at the preprocessing stage.
 
     Args:
         data: Raw OHLC tensor of shape (num_samples, 4).
@@ -188,34 +190,28 @@ def preprocess_data(
 
     Returns:
         Dictionary containing:
-        - train_data: Normalized quaternion-encoded training data
-        - val_data: Normalized quaternion-encoded validation data
-        - test_data: Normalized quaternion-encoded test data
-        - norm_stats: Normalization statistics (from train only)
+        - train_data: Quaternion-encoded training data (raw scale)
+        - val_data: Quaternion-encoded validation data (raw scale)
+        - test_data: Quaternion-encoded test data (raw scale)
+        - norm_stats: Dictionary with training return statistics
         - split_info: Split boundary information
     """
-    # Step 1: Temporal split (on RAW data, before normalization!)
+    # Step 1: Temporal split (on RAW data)
     train_raw, val_raw, test_raw, split_info = temporal_split(
         data, dates, train_end_year, val_end_year
     )
 
-    # Step 2: Compute normalization stats from TRAIN ONLY
-    _, norm_stats = normalize_data(train_raw)
-
-    # Compute training-set return std for 3-class directional threshold
+    # Step 2: Compute training-set return std for 3-class directional threshold
+    # (Z-score normalization removed -- RevIN handles normalization inside models)
+    norm_stats = {}
     train_close = train_raw[:, 3]
     train_returns = (train_close[1:] - train_close[:-1]) / (train_close[:-1].abs() + 1e-8)
     norm_stats['return_std'] = train_returns.std().item()
 
-    # Step 3: Apply normalization using train stats to all splits
-    train_norm, _ = normalize_data(train_raw, stats=norm_stats)
-    val_norm, _ = normalize_data(val_raw, stats=norm_stats)
-    test_norm, _ = normalize_data(test_raw, stats=norm_stats)
-
-    # Step 4: Quaternion encoding (semantic transformation)
-    train_quat = encode_quaternion(train_norm)
-    val_quat = encode_quaternion(val_norm)
-    test_quat = encode_quaternion(test_norm)
+    # Step 3: Quaternion encoding (semantic transformation)
+    train_quat = encode_quaternion(train_raw)
+    val_quat = encode_quaternion(val_raw)
+    test_quat = encode_quaternion(test_raw)
 
     return {
         'train_data': train_quat,
@@ -234,10 +230,12 @@ def preprocess_data_ratio(
     test_ratio: float = 0.20
 ) -> Dict:
     """
-    Complete preprocessing pipeline with ratio-based splitting: split, normalize, encode.
+    Complete preprocessing pipeline with ratio-based splitting: split, encode.
 
-    CRITICAL: Normalization statistics are computed from training data ONLY
-    to prevent look-ahead bias.
+    Normalization is now handled inside models via RevIN (Reversible Instance
+    Normalization), which normalizes each input window independently at
+    inference time. This eliminates static Z-score normalization and the
+    associated look-ahead bias concern at the preprocessing stage.
 
     Args:
         data: Raw OHLC tensor of shape (num_samples, 4).
@@ -248,34 +246,28 @@ def preprocess_data_ratio(
 
     Returns:
         Dictionary containing:
-        - train_data: Normalized quaternion-encoded training data
-        - val_data: Normalized quaternion-encoded validation data
-        - test_data: Normalized quaternion-encoded test data
-        - norm_stats: Normalization statistics (from train only)
+        - train_data: Quaternion-encoded training data (raw scale)
+        - val_data: Quaternion-encoded validation data (raw scale)
+        - test_data: Quaternion-encoded test data (raw scale)
+        - norm_stats: Dictionary with training return statistics
         - split_info: Split boundary information
     """
-    # Step 1: Temporal split by ratio (on RAW data, before normalization!)
+    # Step 1: Temporal split by ratio (on RAW data)
     train_raw, val_raw, test_raw, split_info = temporal_split_ratio(
         data, dates, train_ratio, val_ratio, test_ratio
     )
 
-    # Step 2: Compute normalization stats from TRAIN ONLY
-    _, norm_stats = normalize_data(train_raw)
-
-    # Compute training-set return std for 3-class directional threshold
+    # Step 2: Compute training-set return std for 3-class directional threshold
+    # (Z-score normalization removed -- RevIN handles normalization inside models)
+    norm_stats = {}
     train_close = train_raw[:, 3]
     train_returns = (train_close[1:] - train_close[:-1]) / (train_close[:-1].abs() + 1e-8)
     norm_stats['return_std'] = train_returns.std().item()
 
-    # Step 3: Apply normalization using train stats to all splits
-    train_norm, _ = normalize_data(train_raw, stats=norm_stats)
-    val_norm, _ = normalize_data(val_raw, stats=norm_stats)
-    test_norm, _ = normalize_data(test_raw, stats=norm_stats)
-
-    # Step 4: Quaternion encoding (semantic transformation)
-    train_quat = encode_quaternion(train_norm)
-    val_quat = encode_quaternion(val_norm)
-    test_quat = encode_quaternion(test_norm)
+    # Step 3: Quaternion encoding (semantic transformation)
+    train_quat = encode_quaternion(train_raw)
+    val_quat = encode_quaternion(val_raw)
+    test_quat = encode_quaternion(test_raw)
 
     return {
         'train_data': train_quat,
