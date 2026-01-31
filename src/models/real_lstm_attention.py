@@ -7,7 +7,6 @@ Combines LSTM encoder with temporal attention mechanism.
 import torch
 import torch.nn as nn
 from .attention import TemporalAttention
-from .revin import RevIN
 
 
 class RealLSTMAttention(nn.Module):
@@ -15,19 +14,15 @@ class RealLSTMAttention(nn.Module):
     Real-valued LSTM with Temporal Attention for time-series regression.
 
     Architecture:
-        1. RevIN normalizes input instance
-        2. LSTM encodes full sequence
-        3. Temporal attention weights all time steps
-        4. Linear head produces regression output
-        5. RevIN denormalizes output to original scale
+        1. LSTM encodes full sequence
+        2. Temporal attention weights all time steps
+        3. Linear head produces regression output
 
     Args:
         input_size: Number of input features (default: 4 for OHLC).
         hidden_size: Size of LSTM hidden state.
         num_layers: Number of stacked LSTM layers.
         dropout: Dropout rate between LSTM layers.
-        num_features: Number of features for RevIN normalization.
-        target_col: Index of target feature for scalar denormalization.
     """
 
     def __init__(
@@ -36,15 +31,10 @@ class RealLSTMAttention(nn.Module):
         hidden_size: int,
         num_layers: int = 1,
         dropout: float = 0.0,
-        num_features: int = 4,
-        target_col: int = 3
     ):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        self.target_col = target_col
-
-        self.revin = RevIN(num_features)
 
         # LSTM encoder - processes full sequence
         self.lstm = nn.LSTM(
@@ -74,12 +64,9 @@ class RealLSTMAttention(nn.Module):
             return_attention_weights: If True, also return attention weights.
 
         Returns:
-            Predictions of shape (batch, 1) in original price scale.
+            Predictions of shape (batch, 1).
             Optionally attention weights of shape (batch, seq_len).
         """
-        # Instance normalization
-        x = self.revin(x, 'norm')
-
         # LSTM encoding - get all time step outputs
         # lstm_out: (batch, seq_len, hidden_size)
         lstm_out, _ = self.lstm(x)
@@ -92,9 +79,6 @@ class RealLSTMAttention(nn.Module):
 
         # Regression output
         output = self.output_head(context)
-
-        # Reverse normalization to original scale
-        output = self.revin.denorm_scalar(output, self.target_col)
 
         if return_attention_weights:
             return output, attn_weights

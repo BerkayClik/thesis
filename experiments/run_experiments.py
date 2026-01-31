@@ -133,8 +133,6 @@ def create_model(model_type: str, hidden_size: int, num_layers: int, dropout: fl
             hidden_size=hidden_size,
             num_layers=num_layers,
             dropout=dropout,
-            num_features=4,
-            target_col=3
         )
     elif model_type == "real_lstm_attention":
         return RealLSTMAttention(
@@ -142,8 +140,6 @@ def create_model(model_type: str, hidden_size: int, num_layers: int, dropout: fl
             hidden_size=hidden_size,
             num_layers=num_layers,
             dropout=dropout,
-            num_features=4,
-            target_col=3
         )
     elif model_type == "quaternion_lstm":
         return QuaternionLSTMNoAttention(
