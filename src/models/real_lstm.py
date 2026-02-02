@@ -39,6 +39,15 @@ class RealLSTM(nn.Module):
         )
 
         self.output_head = nn.Linear(hidden_size, 1)
+        self._init_forget_gate_bias()
+
+    def _init_forget_gate_bias(self):
+        """Initialize forget gate bias to +1.0 (Jozefowicz et al. 2015)."""
+        with torch.no_grad():
+            for name, param in self.lstm.named_parameters():
+                if 'bias' in name:
+                    n = self.hidden_size
+                    param.data[n:2*n].fill_(1.0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """

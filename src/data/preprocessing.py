@@ -193,7 +193,7 @@ def preprocess_data(
         - train_data: Quaternion-encoded training data (raw scale)
         - val_data: Quaternion-encoded validation data (raw scale)
         - test_data: Quaternion-encoded test data (raw scale)
-        - norm_stats: Dictionary with training return statistics
+        - norm_stats: Dictionary with training-set mean, std, and return statistics
         - split_info: Split boundary information
     """
     # Step 1: Temporal split (on RAW data)
@@ -204,6 +204,8 @@ def preprocess_data(
     # Step 2: Compute training-set return std for 3-class directional threshold
     # (Z-score normalization removed -- RevIN handles normalization inside models)
     norm_stats = {}
+    norm_stats['mean'] = train_raw.mean(dim=0)
+    norm_stats['std'] = train_raw.std(dim=0).clamp(min=1e-6)
     train_close = train_raw[:, 3]
     train_returns = (train_close[1:] - train_close[:-1]) / (train_close[:-1].abs() + 1e-8)
     norm_stats['return_std'] = train_returns.std().item()
@@ -249,7 +251,7 @@ def preprocess_data_ratio(
         - train_data: Quaternion-encoded training data (raw scale)
         - val_data: Quaternion-encoded validation data (raw scale)
         - test_data: Quaternion-encoded test data (raw scale)
-        - norm_stats: Dictionary with training return statistics
+        - norm_stats: Dictionary with training-set mean, std, and return statistics
         - split_info: Split boundary information
     """
     # Step 1: Temporal split by ratio (on RAW data)
@@ -260,6 +262,8 @@ def preprocess_data_ratio(
     # Step 2: Compute training-set return std for 3-class directional threshold
     # (Z-score normalization removed -- RevIN handles normalization inside models)
     norm_stats = {}
+    norm_stats['mean'] = train_raw.mean(dim=0)
+    norm_stats['std'] = train_raw.std(dim=0).clamp(min=1e-6)
     train_close = train_raw[:, 3]
     train_returns = (train_close[1:] - train_close[:-1]) / (train_close[:-1].abs() + 1e-8)
     norm_stats['return_std'] = train_returns.std().item()

@@ -22,7 +22,7 @@ from scipy import stats
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.data.loader import load_sp500_data, dataframe_to_tensor
-from src.data.preprocessing import preprocess_data, preprocess_data_ratio
+from src.data.preprocessing import preprocess_data, preprocess_data_ratio, normalize_data
 from src.data.dataset import SP500Dataset
 from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel
 from src.models.qnn_attention_model import QuaternionLSTMNoAttention
@@ -161,6 +161,11 @@ def create_model(model_type: str, hidden_size: int, num_layers: int, dropout: fl
         raise ValueError(f"Unknown model type: {model_type}")
 
 
+def denormalize(x: torch.Tensor, stats: Dict, col: int = 3) -> torch.Tensor:
+    """Denormalize data using stored statistics."""
+    return x * stats['std'][col] + stats['mean'][col]
+
+
 def compute_statistical_significance(
     results: Dict,
     baseline_model: str = "real_lstm"
@@ -234,23 +239,30 @@ def evaluate_model(
     dataloader: DataLoader,
     device: torch.device,
     norm_stats: Dict,
-    flat_threshold_fraction: float = 0.5
+    flat_threshold_fraction: float = 0.5,
+    needs_denorm: bool = False
 ) -> Dict:
     """
     Evaluate model on a dataset.
 
     Returns dict with MAPE, directional accuracy (binary and 3-class),
     and Sharpe ratio (binary and 3-class).
-    All metrics are computed on original-scale prices. Models with RevIN
-    output predictions in original price scale directly; the naive baseline
-    also operates on raw prices since preprocessing no longer normalizes.
+    All metrics are computed on original-scale prices.
+
+    Two data paths:
+    - Quaternion models (needs_denorm=False): use raw data with internal RevIN,
+      outputs are already in original price scale.
+    - Real LSTM / naive models (needs_denorm=True): use Z-score normalized data,
+      outputs are denormalized back to original price scale here.
 
     Args:
         model: The model to evaluate.
         dataloader: DataLoader for the evaluation dataset.
         device: Compute device.
-        norm_stats: Dict with 'return_std' for flat threshold computation.
+        norm_stats: Dict with 'mean', 'std', and 'return_std' for denormalization
+                    and flat threshold computation.
         flat_threshold_fraction: Fraction of training return_std for FLAT zone (default: 0.5).
+        needs_denorm: If True, denormalize predictions/targets/prevs from Z-score scale.
     """
     model.eval()
     all_preds = []
@@ -275,8 +287,12 @@ def evaluate_model(
     targets = torch.cat(all_targets)
     prevs = torch.cat(all_prevs)
 
-    # No denormalization needed: models output original-scale prices via RevIN,
-    # and preprocessing no longer applies Z-score normalization.
+    if needs_denorm:
+        # Real LSTM / naive: outputs are in normalized scale, denormalize to original prices
+        preds = denormalize(preds, norm_stats, col=3)
+        targets = denormalize(targets, norm_stats, col=3)
+        prevs = denormalize(prevs, norm_stats, col=3)
+    # Quaternion models: outputs already in original price scale via RevIN
 
     # Compute flat threshold from training return std
     return_std = norm_stats.get('return_std', 0.0)
@@ -319,7 +335,8 @@ def run_single_experiment(
     debug: bool = False,
     variant_name: str = "default",
     fast_mode: bool = False,
-    flat_threshold_fraction: float = 0.5
+    flat_threshold_fraction: float = 0.5,
+    needs_denorm: bool = False
 ) -> Dict:
     """
     Run a single experiment with one model configuration and seed.
@@ -421,7 +438,8 @@ def run_single_experiment(
 
     # Evaluate on test set
     test_metrics = evaluate_model(model, test_loader, device, norm_stats,
-                                  flat_threshold_fraction=flat_threshold_fraction)
+                                  flat_threshold_fraction=flat_threshold_fraction,
+                                  needs_denorm=needs_denorm)
 
     result = {
         'seed': seed,
@@ -532,17 +550,34 @@ def run_experiment(
     test_data = processed['test_data']
     norm_stats = processed['norm_stats']
 
-    # Create datasets (predicting normalized close price)
-    window_size = config['data']['window_size']
-    train_dataset = SP500Dataset(train_data, window_size=window_size)
-    val_dataset = SP500Dataset(val_data, window_size=window_size)
-    test_dataset = SP500Dataset(test_data, window_size=window_size)
+    # Z-score normalize data using training stats (for real LSTM / naive models)
+    stats = {'mean': norm_stats['mean'], 'std': norm_stats['std']}
+    train_norm, _ = normalize_data(train_data, stats=stats)
+    val_norm, _ = normalize_data(val_data, stats=stats)
+    test_norm, _ = normalize_data(test_data, stats=stats)
 
-    # Create data loaders
+    # Create datasets
+    window_size = config['data']['window_size']
+
+    # Raw datasets (for quaternion models with internal RevIN)
+    train_dataset_raw = SP500Dataset(train_data, window_size=window_size)
+    val_dataset_raw = SP500Dataset(val_data, window_size=window_size)
+    test_dataset_raw = SP500Dataset(test_data, window_size=window_size)
+
+    # Normalized datasets (for real LSTM / naive models)
+    train_dataset_norm = SP500Dataset(train_norm, window_size=window_size)
+    val_dataset_norm = SP500Dataset(val_norm, window_size=window_size)
+    test_dataset_norm = SP500Dataset(test_norm, window_size=window_size)
+
+    # Create data loaders for both paths
     batch_size = config['training']['batch_size']
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size)
+    train_loader_raw = DataLoader(train_dataset_raw, batch_size=batch_size, shuffle=False)
+    val_loader_raw = DataLoader(val_dataset_raw, batch_size=batch_size)
+    test_loader_raw = DataLoader(test_dataset_raw, batch_size=batch_size)
+
+    train_loader_norm = DataLoader(train_dataset_norm, batch_size=batch_size, shuffle=False)
+    val_loader_norm = DataLoader(val_dataset_norm, batch_size=batch_size)
+    test_loader_norm = DataLoader(test_dataset_norm, batch_size=batch_size)
 
     # Get evaluation settings
     flat_threshold_fraction = config.get('evaluation', {}).get('flat_threshold_fraction', 0.5)
@@ -561,6 +596,19 @@ def run_experiment(
         if verbose:
             print(f"\nRunning variant: {variant_name}")
 
+        # Select data path based on model type
+        uses_revin = 'quaternion' in model_config['type']
+        needs_denorm = not uses_revin
+
+        if uses_revin:
+            cur_train_loader = train_loader_raw
+            cur_val_loader = val_loader_raw
+            cur_test_loader = test_loader_raw
+        else:
+            cur_train_loader = train_loader_norm
+            cur_val_loader = val_loader_norm
+            cur_test_loader = test_loader_norm
+
         variant_results = []
         fast_mode = config.get('training', {}).get('fast_mode', False)
         for seed in seeds:
@@ -569,16 +617,17 @@ def run_experiment(
                 model_config=model_config,
                 variant=variant,
                 seed=seed,
-                train_loader=train_loader,
-                val_loader=val_loader,
-                test_loader=test_loader,
+                train_loader=cur_train_loader,
+                val_loader=cur_val_loader,
+                test_loader=cur_test_loader,
                 device=device,
                 norm_stats=norm_stats,
                 verbose=verbose,
                 debug=debug,
                 variant_name=variant_name,
                 fast_mode=fast_mode,
-                flat_threshold_fraction=flat_threshold_fraction
+                flat_threshold_fraction=flat_threshold_fraction,
+                needs_denorm=needs_denorm
             )
             variant_results.append(result)
 
