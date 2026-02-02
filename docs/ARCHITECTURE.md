@@ -183,11 +183,11 @@ The Hamilton product can be expressed as a matrix-vector multiplication, which i
 
 **File:** `src/models/revin.py`
 
-All models use **RevIN** (Reversible Instance Normalization) to handle the non-stationary nature of financial time series. Instead of applying static Z-score normalization during preprocessing, RevIN normalizes each input window independently inside the model and reverses the transformation on the output.
+**Quaternion models** use **RevIN** (Reversible Instance Normalization) to handle the non-stationary nature of financial time series. RevIN normalizes each input window independently inside the model and reverses the transformation on the output. **Real LSTM models** use static **Z-score normalization** instead — training-set mean and standard deviation are computed once and applied identically to all splits (train, validation, test). Real LSTM models output predictions in normalized scale; denormalization back to original prices happens externally in the evaluation pipeline.
 
-### Why RevIN?
+### Why RevIN for Quaternion Models?
 
-Financial time series exhibit **distribution shift** — the price distribution changes over time. A model trained on 2014–2021 data sees different price scales than 2023–2024 test data. Static Z-score normalization computed from training data becomes stale. RevIN solves this by normalizing each window using its own statistics.
+Financial time series exhibit **distribution shift** — the price distribution changes over time. A model trained on 2014–2021 data sees different price scales than 2023–2024 test data. Static Z-score normalization computed from training data can become stale. RevIN solves this by normalizing each window using its own statistics, which is used by the quaternion models.
 
 ### How RevIN Works
 
@@ -257,19 +257,13 @@ Inspired by: Kim et al., "Reversible Instance Normalization for Accurate Time-Se
 
 **File:** `src/models/real_lstm.py`
 
-This is the simplest model — a standard PyTorch LSTM wrapped with RevIN.
+This is the simplest model — a standard PyTorch LSTM that receives Z-score normalized input and outputs predictions in normalized scale. Denormalization to original price scale happens externally in the evaluation pipeline.
 
 ### Architecture
 
 ```
-Input: (batch, 20, 4)
+Input: (batch, 20, 4) — Z-score normalized OHLC
          │
-         ▼
-    ┌─────────┐
-    │  RevIN   │  Instance normalization
-    │  (norm)  │
-    └────┬────┘
-         │ (batch, 20, 4) — normalized
          ▼
     ┌─────────┐
     │  LSTM   │  PyTorch's nn.LSTM
@@ -284,24 +278,19 @@ Input: (batch, 20, 4)
     ┌─────────┐
     │ Linear  │  64 → 1
     └────┬────┘
-         │ (batch, 1) — normalized scale
-         ▼
-    ┌─────────┐
-    │  RevIN   │  Scalar denormalization (Close price)
-    │ (denorm) │
-    └────┬────┘
          │
          ▼
-Output: (batch, 1) — original price scale
+Output: (batch, 1) — normalized scale
 ```
+
+Denormalization to original price scale is performed externally in the evaluation pipeline using the stored training-set mean and standard deviation.
 
 ### Key Code
 
 ```python
 class RealLSTM(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, dropout,
-                 num_features=4, target_col=3):
-        self.revin = RevIN(num_features)
+    def __init__(self, input_size, hidden_size, num_layers, dropout):
+        self.hidden_size = hidden_size
         self.lstm = nn.LSTM(
             input_size=input_size,      # 4 (OHLC)
             hidden_size=hidden_size,    # 64
@@ -310,14 +299,13 @@ class RealLSTM(nn.Module):
             dropout=dropout if num_layers > 1 else 0.0
         )
         self.output_head = nn.Linear(hidden_size, 1)
+        self._init_forget_gate_bias()
 
     def forward(self, x):
-        x = self.revin(x, 'norm')           # Instance normalization
         lstm_out, _ = self.lstm(x)           # (batch, 20, 64)
         last_out = lstm_out[:, -1, :]        # (batch, 64) - last timestep
         output = self.output_head(last_out)  # (batch, 1)
-        output = self.revin.denorm_scalar(output, self.target_col)
-        return output                        # (batch, 1) original scale
+        return output                        # (batch, 1) normalized scale
 ```
 
 ### Limitation
@@ -377,14 +365,14 @@ class TemporalAttention(nn.Module):
 
 ### Architecture
 
+Like the baseline Real LSTM, this model receives Z-score normalized input and outputs in normalized scale. The architecture has three stages:
+
+1. **LSTM** encodes the full sequence
+2. **Temporal attention** weights all time steps
+3. **Linear head** produces the regression output
+
 ```
-Input: (batch, 20, 4)
-         │
-         ▼
-    ┌─────────┐
-    │  RevIN   │  Instance normalization
-    │  (norm)  │
-    └────┬────┘
+Input: (batch, 20, 4) — Z-score normalized OHLC
          │
          ▼
     ┌─────────┐
@@ -402,18 +390,31 @@ Input: (batch, 20, 4)
     └────┬────┘
          │
          ▼
-    ┌─────────┐
-    │  RevIN   │  Scalar denormalization
-    │ (denorm) │
-    └────┬────┘
-         │
-         ▼
-Output: (batch, 1) — original price scale
+Output: (batch, 1) — normalized scale
 ```
+
+Denormalization to original price scale is performed externally in the evaluation pipeline.
 
 ### Advantage
 
 Can learn that "3 days ago was important for this prediction" rather than always focusing on the most recent day.
+
+### Training Stability: Forget Gate Bias
+
+Both Real LSTM models initialize the forget gate bias to +1.0 (Jozefowicz et al. 2015). This keeps the forget gate initially open, helping with long-term dependencies.
+
+PyTorch `nn.LSTM` stores biases as `(4 * hidden_size,)` with layout `[input_gate, forget_gate, cell_gate, output_gate]`:
+
+```python
+def _init_forget_gate_bias(self):
+    with torch.no_grad():
+        for name, param in self.lstm.named_parameters():
+            if 'bias' in name:
+                n = self.hidden_size
+                param.data[n:2*n].fill_(1.0)  # forget gate slice
+```
+
+This matches the Quaternion LSTM cell which also initializes its forget gate bias to +1.0.
 
 ---
 
@@ -760,14 +761,14 @@ class QNNAttentionModel(QuaternionLSTMBase):
 
 ### 4 Model Architectures
 
-| Model | OHLC Encoding | Sequence Processing | Time Aggregation |
-|-------|---------------|---------------------|------------------|
-| Real LSTM | Independent features | Standard LSTM | Last timestep |
-| Real LSTM + Attention | Independent features | Standard LSTM | Learned weights |
-| Quaternion LSTM | Single quaternion | Hamilton product LSTM | Last timestep |
-| **Quaternion LSTM + Attention** | Single quaternion | Hamilton product LSTM | Learned weights |
+| Model | OHLC Encoding | Sequence Processing | Time Aggregation | Normalization |
+|-------|---------------|---------------------|------------------|---------------|
+| Real LSTM | Independent features | Standard LSTM | Last timestep | Z-score (external) |
+| Real LSTM + Attention | Independent features | Standard LSTM | Learned weights | Z-score (external) |
+| Quaternion LSTM | Single quaternion | Hamilton product LSTM | Last timestep | RevIN (internal) |
+| **Quaternion LSTM + Attention** | Single quaternion | Hamilton product LSTM | Learned weights | RevIN (internal) |
 
-All models use RevIN for per-instance normalization and denormalization.
+Real LSTM models use Z-score normalization (training-set statistics applied externally). Quaternion models use RevIN for per-instance normalization and denormalization internally.
 
 ### 7 Experimental Variants
 
@@ -822,7 +823,7 @@ Quaternion models include an additional projection layer that Real models don't 
 
 ```
 Quaternion: RevIN → QLSTM → Flatten(hidden*4) → Projection(hidden*4 → hidden) → Linear(hidden → 1) → RevIN denorm
-Real:       RevIN → LSTM  → Last timestep(hidden) → Linear(hidden → 1) → RevIN denorm
+Real:       Z-score input → LSTM → Last timestep(hidden) → Linear(hidden → 1) → external denorm
 ```
 
 **Output Head:** Both Real and Quaternion models use the same single `Linear(hidden → 1)` output layer. The projection layer in Quaternion models transforms the flattened quaternion output (hidden*4) back to real space (hidden) before the output head.
@@ -845,53 +846,53 @@ The research question: **Does quaternion encoding help predict stock prices?**
 Raw OHLC Data (e.g., BTC-USD from Yahoo Finance)
          │
          ▼
-┌─────────────────────────────┐
-│      Preprocessing          │
-│  1. Temporal split (raw)    │
-│  2. Compute return_std      │
-│     (training set only,     │
-│      for 3-class threshold) │
-│  3. Quaternion encoding     │
-│     (semantic identity)     │
-│  4. Sliding windows         │
-│  (No Z-score — RevIN inside │
-│   models handles this)      │
-└──────────┬──────────────────┘
+┌──────────────────────────────────┐
+│         Preprocessing            │
+│  1. Temporal split (raw)         │
+│  2. Compute return_std           │
+│     (training set only,          │
+│      for 3-class threshold)      │
+│  3. Quaternion encoding          │
+│     (semantic identity)          │
+│  4. Sliding windows              │
+│  5. Z-score normalization        │
+│     (Real models only; computed  │
+│      from training set)          │
+└──────────┬───────────────────────┘
            │
-           ▼
-    X: (batch, 20, 4) raw OHLC
-    y: next-day raw Close price
-           │
-    ┌──────┴──────┐
-    │             │
-    ▼             ▼
-Real Models   Quaternion Models
-    │             │
-    ▼             ▼
-  RevIN norm    RevIN norm        ← Per-instance normalization
-    │             │
-    │        unsqueeze(2)
-    │             │
-    ▼             ▼
-(batch,20,4)  (batch,20,1,4)
-    │             │
-    ▼             ▼
-  LSTM       Quaternion LSTM
-    │             │
-    ▼             ▼
-(batch,20,H)  (batch,20,H,4)
-    │             │
-    │         flatten
-    │             │
-    │             ▼
-    │        (batch,20,H*4)
-    │             │
-    │          project
-    │             │
-    ▼             ▼
-(batch,20,H)  (batch,20,H)
-    │             │
-    └──────┬──────┘
+    ┌──────┴──────────────────────┐
+    │                             │
+    ▼                             ▼
+Real Models:                  Quaternion Models:
+X: (batch, 20, 4)            X: (batch, 20, 4)
+   Z-score normalized OHLC      raw OHLC
+y: normalized Close           y: raw Close price
+    │                             │
+    │                             ▼
+    │                        RevIN norm       ← Per-instance normalization
+    │                             │
+    │                        unsqueeze(2)
+    │                             │
+    ▼                             ▼
+(batch,20,4)               (batch,20,1,4)
+    │                             │
+    ▼                             ▼
+  LSTM                    Quaternion LSTM
+    │                             │
+    ▼                             ▼
+(batch,20,H)               (batch,20,H,4)
+    │                             │
+    │                         flatten
+    │                             │
+    │                             ▼
+    │                       (batch,20,H*4)
+    │                             │
+    │                          project
+    │                             │
+    ▼                             ▼
+(batch,20,H)               (batch,20,H)
+    │                             │
+    └──────┬──────────────────────┘
            │
     ┌──────┴──────┐
     │             │
@@ -909,12 +910,20 @@ Last step    Attention
            ▼
       (batch, 1)
            │
-           ▼
-    RevIN denorm_scalar       ← Restores original price scale
-           │                     (uses stored mean/std for Close)
-           ▼
-   Predicted Close Price
-      (original scale)
+    ┌──────┴──────────────────────┐
+    │                             │
+    ▼                             ▼
+Real Models:               Quaternion Models:
+(normalized scale)         RevIN denorm_scalar
+    │                             │
+    ▼                             ▼
+External denorm            Predicted Close Price
+(undo Z-score using           (original scale)
+ training mean/std)
+    │
+    ▼
+Predicted Close Price
+   (original scale)
 ```
 
 ---
@@ -946,11 +955,15 @@ Timeline: start ─────────────────────�
 
 | Split | Purpose | Normalization |
 |-------|---------|---------------|
-| Train | Model learning | RevIN (per-window) |
-| Validation | Early stopping & LR scheduling | RevIN (per-window) |
-| Test | Final unbiased evaluation | RevIN (per-window) |
+| Train | Model learning | Z-score (real LSTM / naive) or RevIN (quaternion) |
+| Validation | Early stopping & LR scheduling | Z-score (real LSTM / naive) or RevIN (quaternion) |
+| Test | Final unbiased evaluation | Z-score (real LSTM / naive) or RevIN (quaternion) |
 
-**Critical:** RevIN normalizes each window independently using its own statistics, so there is no cross-sample leakage. Training return statistics (return_std) are computed from training data only for the 3-class evaluation threshold.
+**Two normalization approaches:**
+- **Real LSTM / naive models** receive Z-score normalized data. Training-set mean and std are computed once and applied to all splits. Models output in normalized scale; denormalization happens externally in the evaluation pipeline.
+- **Quaternion models** receive raw data. RevIN normalizes each window independently using its own statistics inside the model, so there is no cross-sample leakage.
+
+Training return statistics (return_std) are computed from training data only for the 3-class evaluation threshold.
 
 ### Preprocessing Pipeline Order
 
@@ -960,14 +973,20 @@ Timeline: start ─────────────────────�
 # Step 1: Temporal split (on RAW data)
 train_raw, val_raw, test_raw = temporal_split(raw_data, dates)
 
-# Step 2: Compute training return statistics (for 3-class evaluation threshold)
+# Step 2: Compute training-set statistics
 train_returns = compute_returns(train_raw[:, 3])  # Close column
-norm_stats = {'return_std': train_returns.std()}
+norm_stats = {
+    'mean': train_raw.mean(dim=0),           # For Z-score normalization
+    'std': train_raw.std(dim=0).clamp(1e-6), # For Z-score normalization
+    'return_std': train_returns.std()         # For 3-class threshold
+}
 
 # Step 3: Quaternion encoding (semantic transformation — identity mapping)
 train_data = encode_quaternion(train_raw)  # Same data, marked as quaternion
 
-# Normalization is handled inside each model by RevIN (see above)
+# The experiment runner normalizes data for real LSTM models:
+# train_norm = (train_raw - mean) / std   (using training stats)
+# Quaternion models receive raw data and normalize internally via RevIN
 ```
 
 ### Sliding Window Creation
@@ -977,12 +996,14 @@ train_data = encode_quaternion(train_raw)  # Same data, marked as quaternion
 Data is converted to supervised learning format:
 
 ```
-Input Window (X): 20 consecutive days of raw OHLC
-Target (y): Next-day raw Close price
+Input Window (X): 20 consecutive days of OHLC data
+Target (y): Next-day Close price (same scale as input)
 
 Day:    1   2   3  ...  19  20  │ 21
-        └─── X (raw OHLC) ─────┘  └── y = Close₂₁
+        └─── X (OHLC) ─────────┘  └── y = Close₂₁
 ```
+
+**Note:** Real LSTM models receive Z-score normalized windows (and targets in normalized scale). Quaternion models receive raw OHLC windows (and targets in raw price scale). The target is always in the same scale as the input for each model type.
 
 ```python
 class SP500Dataset(Dataset):
@@ -1017,7 +1038,7 @@ The training loop processes batches with gradient updates:
 │      ▼                                                      │
 │  ┌─────────────┐                                           │
 │  │ Forward Pass │  pred = model(x)                         │
-│  └──────┬──────┘  (includes RevIN norm + denorm)           │
+│  └──────┬──────┘  (quaternion: includes RevIN norm+denorm) │
 │         │                                                   │
 │         ▼                                                   │
 │  ┌─────────────┐                                           │
@@ -1115,7 +1136,10 @@ After training completes, the **best checkpoint** is loaded and evaluated on the
 │                                                            │
 │  3. Forward pass on test set (no gradients)                │
 │     └── predictions = model(test_data)                     │
-│         (models output original-scale prices via RevIN)    │
+│     • Real LSTM / naive: output in normalized scale        │
+│       → denormalized externally using training mean/std    │
+│     • Quaternion: output in original price scale           │
+│       → RevIN denormalizes internally                      │
 │                                                            │
 │  4. Compute evaluation metrics:                            │
 │     ├── MAPE (Mean Absolute Percentage Error)              │
@@ -1190,18 +1214,21 @@ sharpe = mean(active_returns) / std(active_returns)
             │  ─────────────────────────── │
             │  • Download OHLC data        │
             │  • Temporal split            │
-            │  • Compute return_std        │
+            │  • Compute norm_stats         │
+            │    (mean, std, return_std)   │
             │  • Create sliding windows    │
-            │  (RevIN normalizes in model) │
+            │  • Z-score normalize         │
+            │    (for real LSTM / naive)   │
             └──────────────┬───────────────┘
                            │
                            ▼
             ┌──────────────────────────────┐
             │    Create DataLoaders        │
             │  ─────────────────────────── │
-            │  • train_loader (shuffle=F)  │
-            │  • val_loader (shuffle=F)    │
-            │  • test_loader (shuffle=F)   │
+            │  • Normalized loaders        │
+            │    (for real LSTM / naive)   │
+            │  • Raw loaders               │
+            │    (for quaternion + RevIN)  │
             └──────────────┬───────────────┘
                            │
                            ▼
@@ -1266,11 +1293,13 @@ sharpe = mean(active_returns) / std(active_returns)
             │       Test Evaluation        │
             │  ─────────────────────────── │
             │  • Forward pass on test set  │
+            │  • Denormalize if needed     │
+            │    (real LSTM / naive only)  │
             │  • Compute MAPE              │
             │  • Compute Dir. Accuracy     │
             │  • Compute Sharpe Ratio      │
             │  (all on original-scale      │
-            │   prices via RevIN)          │
+            │   prices after denorm)       │
             └──────────────┬───────────────┘
                            │
                            ▼
