@@ -4,7 +4,7 @@
 experiment:
   name: "4hourly_btc"
   description: "Real vs Quaternion LSTM comparison on 4-hourly BTC data (last year)"
-  seeds: [42,123,456]
+  seeds: [42]
 
   variants:
     # === NAIVE BASELINE ===
