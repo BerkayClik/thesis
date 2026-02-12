@@ -1,36 +1,23 @@
-# Configuration for Quaternion Neural Networks
-# Bitcoin (BTC-USD) 4-Hourly Forecasting - Last 2 Years
-# Downloads 1h data and resamples to 4h
-
-# Data settings
+# Bitcoin (BTC) 4-Hourly — LunarCrush 18-column dataset (resampled from hourly)
 data:
-  # Data source
-  ticker: "BTC-USD"
-  interval: "1h"  # Download hourly, resample to 4h
-  resample_interval: "4h"  # Resample to 4-hourly
-  period: "730d"  # Last 2 years of data
+  source: "lunarcrush"
+  coin: "btc"
+  data_path: "data/cache/lunarcrush_btc_4hour_full.csv"
   cache_dir: "data/cache"
-
-  # Window settings
-  # 30 bars = 5 days for 4h data (6 bars/day)
+  num_features: 18
+  feature_cols: [9, 11, 12, 15]
   window_size: 30
-  target_col: 3  # Close price
-
-  # Split ratios (70/10/20)
+  target_col: 0
   train_ratio: 0.70
   val_ratio: 0.10
   test_ratio: 0.20
-  # Expected data points: ~4,380 bars (730 days * 6 bars/day)
-  # Train: ~3,066 | Val: ~438 | Test: ~876
 
-# Model settings
 model:
   type: "real_lstm"
   hidden_size: 64
   num_layers: 2
   dropout: 0.1
 
-# Training settings
 training:
   batch_size: 32
   num_epochs: 100
@@ -43,20 +30,12 @@ training:
     factor: 0.5
     patience: 5
 
-# Evaluation settings
 evaluation:
-  metrics:
-    - mape
-    - directional_accuracy
-    - sharpe_ratio
-    - directional_accuracy_3class
-    - sharpe_ratio_3class
+  metrics: [mape, directional_accuracy, sharpe_ratio, directional_accuracy_3class, sharpe_ratio_3class]
   flat_threshold_fraction: 0.5
 
-# Device settings
 device: "cuda"
 
-# Output settings
 output:
   results_dir: "experiments/results/4hourly_btc"
   checkpoint_dir: "checkpoints/4hourly_btc"

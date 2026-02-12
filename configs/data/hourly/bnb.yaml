@@ -1,17 +1,13 @@
-# Bitcoin (BTC) Daily — LunarCrush 18-column dataset
+# BNB Hourly — LunarCrush 18-column dataset
 data:
   source: "lunarcrush"
-  coin: "btc"
-  data_path: "data/cache/lunarcrush_btc_day_full.csv"
+  coin: "bnb"
+  data_path: "data/cache/lunarcrush_bnb_hour_full.csv"
   cache_dir: "data/cache"
   num_features: 18
-  # Feature selection for 4-feature quaternion models: close, high, low, open
   feature_cols: [9, 11, 12, 15]
-  # Window settings
-  window_size: 20
-  # target_col is relative to feature_cols (close=0 after selection)
+  window_size: 72
   target_col: 0
-  # Split ratios
   train_ratio: 0.70
   val_ratio: 0.10
   test_ratio: 0.20
@@ -41,5 +37,5 @@ evaluation:
 device: "cuda"
 
 output:
-  results_dir: "experiments/results/daily_btc"
-  checkpoint_dir: "checkpoints/daily_btc"
+  results_dir: "experiments/results/hourly_bnb"
+  checkpoint_dir: "checkpoints/hourly_bnb"

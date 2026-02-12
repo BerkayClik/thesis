@@ -22,7 +22,7 @@ from scipy import stats
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.data.loader import load_sp500_data, dataframe_to_tensor
-from src.data.preprocessing import preprocess_data, preprocess_data_ratio, normalize_data
+from src.data.preprocessing import preprocess_data, preprocess_data_ratio, normalize_data, select_features
 from src.data.dataset import SP500Dataset
 from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel
 from src.models.qnn_attention_model import QuaternionLSTMNoAttention
@@ -111,32 +111,41 @@ def get_device(config: Dict) -> torch.device:
 
 
 class NaiveBaseline(torch.nn.Module):
-    """Naive baseline - predicts last observed close (persistence)."""
+    """Naive baseline - predicts last observed target value (persistence)."""
 
-    def __init__(self):
+    def __init__(self, target_col: int = 3):
         super().__init__()
+        self.target_col = target_col
         # Dummy parameter so optimizer doesn't complain
         self.dummy = torch.nn.Parameter(torch.zeros(1), requires_grad=False)
 
     def forward(self, x):
-        # Return the last close price in the window (persistence model)
-        return x[:, -1, 3:4]  # Last close in window, shape (batch, 1) for consistency
+        # Return the last target value in the window (persistence model)
+        return x[:, -1, self.target_col:self.target_col + 1]  # Shape (batch, 1)
 
 
-def create_model(model_type: str, hidden_size: int, num_layers: int, dropout: float = 0.0):
+def create_model(
+    model_type: str,
+    hidden_size: int,
+    num_layers: int,
+    dropout: float = 0.0,
+    input_size: int = 4,
+    num_features: int = 4,
+    target_col: int = 3
+):
     """Create model based on type string."""
     if model_type == "naive_zero":
-        return NaiveBaseline()
+        return NaiveBaseline(target_col=target_col)
     elif model_type == "real_lstm":
         return RealLSTM(
-            input_size=4,
+            input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             dropout=dropout,
         )
     elif model_type == "real_lstm_attention":
         return RealLSTMAttention(
-            input_size=4,
+            input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             dropout=dropout,
@@ -146,16 +155,16 @@ def create_model(model_type: str, hidden_size: int, num_layers: int, dropout: fl
             hidden_size=hidden_size,
             num_layers=num_layers,
             dropout=dropout,
-            num_features=4,
-            target_col=3
+            num_features=num_features,
+            target_col=target_col
         )
     elif model_type == "quaternion_lstm_attention":
         return QNNAttentionModel(
             hidden_size=hidden_size,
             num_layers=num_layers,
             dropout=dropout,
-            num_features=4,
-            target_col=3
+            num_features=num_features,
+            target_col=target_col
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
@@ -240,7 +249,8 @@ def evaluate_model(
     device: torch.device,
     norm_stats: Dict,
     flat_threshold_fraction: float = 0.5,
-    needs_denorm: bool = False
+    needs_denorm: bool = False,
+    target_col: int = 3
 ) -> Dict:
     """
     Evaluate model on a dataset.
@@ -278,7 +288,7 @@ def evaluate_model(
                 pred = pred.squeeze(-1)  # Only squeeze last dim to preserve batch
             if pred.dim() == 0:
                 pred = pred.unsqueeze(0)  # Handle single-sample batch
-            prev = x[:, -1, 3].cpu()  # Last close in window (raw scale)
+            prev = x[:, -1, target_col].cpu()  # Last target in window
             all_preds.append(pred)
             all_targets.append(y)
             all_prevs.append(prev)
@@ -289,9 +299,9 @@ def evaluate_model(
 
     if needs_denorm:
         # Real LSTM / naive: outputs are in normalized scale, denormalize to original prices
-        preds = denormalize(preds, norm_stats, col=3)
-        targets = denormalize(targets, norm_stats, col=3)
-        prevs = denormalize(prevs, norm_stats, col=3)
+        preds = denormalize(preds, norm_stats, col=target_col)
+        targets = denormalize(targets, norm_stats, col=target_col)
+        prevs = denormalize(prevs, norm_stats, col=target_col)
     # Quaternion models: outputs already in original price scale via RevIN
 
     # Compute flat threshold from training return std
@@ -336,7 +346,9 @@ def run_single_experiment(
     variant_name: str = "default",
     fast_mode: bool = False,
     flat_threshold_fraction: float = 0.5,
-    needs_denorm: bool = False
+    needs_denorm: bool = False,
+    target_col: int = 3,
+    feature_dim: int = 4
 ) -> Dict:
     """
     Run a single experiment with one model configuration and seed.
@@ -350,7 +362,10 @@ def run_single_experiment(
         model_type=model_config['type'],
         hidden_size=model_config.get('hidden_size', 64),
         num_layers=model_config.get('num_layers', 2),
-        dropout=model_config.get('dropout', 0.0)
+        dropout=model_config.get('dropout', 0.0),
+        input_size=feature_dim,
+        num_features=feature_dim,
+        target_col=target_col,
     )
 
     # Compile model for faster execution (PyTorch 2.0+)
@@ -375,6 +390,8 @@ def run_single_experiment(
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     if verbose:
         print(f"    Model parameters: {num_params:,}")
+
+    trainer = None
 
     # Skip training for naive baseline (no trainable parameters)
     if model_config['type'] == 'naive_zero':
@@ -439,7 +456,8 @@ def run_single_experiment(
     # Evaluate on test set
     test_metrics = evaluate_model(model, test_loader, device, norm_stats,
                                   flat_threshold_fraction=flat_threshold_fraction,
-                                  needs_denorm=needs_denorm)
+                                  needs_denorm=needs_denorm,
+                                  target_col=target_col)
 
     result = {
         'seed': seed,
@@ -463,7 +481,7 @@ def run_single_experiment(
 
     # Memory cleanup to prevent OOM during multi-seed/variant runs
     del model
-    if 'trainer' in locals():
+    if trainer is not None:
         del trainer
     gc.collect()
     torch.cuda.empty_cache()
@@ -476,8 +494,8 @@ def run_experiment(
     experiment_config: Dict,
     verbose: bool = True,
     debug: bool = False,
-    output_dir: str = None,
-    experiment_name: str = None
+    output_dir: Optional[str] = None,
+    experiment_name: Optional[str] = None
 ) -> Dict:
     """
     Run a complete experiment with multiple seeds.
@@ -498,19 +516,28 @@ def run_experiment(
     if verbose:
         print("Loading data...")
 
+    data_config = config['data']
+    data_source = data_config.get('source', 'yahoo')
+    target_col = data_config.get('target_col', 3)
+
     df = load_sp500_data(
-        ticker=config['data']['ticker'],
-        start_date=config['data'].get('start_date'),
-        end_date=config['data'].get('end_date'),
-        cache_dir=config['data'].get('cache_dir', 'data/cache'),
-        interval=config['data'].get('interval', '1d'),
-        period=config['data'].get('period'),
-        resample_interval=config['data'].get('resample_interval')
+        data_path=data_config.get('data_path'),
+        ticker=data_config.get('ticker', '^GSPC'),
+        start_date=data_config.get('start_date'),
+        end_date=data_config.get('end_date'),
+        cache_dir=data_config.get('cache_dir', 'data/cache'),
+        interval=data_config.get('interval', '1d'),
+        period=data_config.get('period'),
+        resample_interval=data_config.get('resample_interval'),
+        source=data_source,
+        coin=data_config.get('coin', 'btc'),
+        api_key=data_config.get('api_key'),
+        api_key_env=data_config.get('api_key_env', 'LUNARCRUSH_API_KEY'),
     )
 
     if verbose:
-        interval_str = config['data'].get('interval', '1d')
-        resample_str = config['data'].get('resample_interval')
+        interval_str = data_config.get('interval', '1d')
+        resample_str = data_config.get('resample_interval')
         if resample_str:
             print(f"  Loaded {len(df)} data points ({interval_str} -> {resample_str} resampled)")
         else:
@@ -519,15 +546,29 @@ def run_experiment(
     # Convert to tensor with dates
     data, dates = dataframe_to_tensor(df)
 
+    # Apply feature column selection if specified in config
+    feature_cols = data_config.get('feature_cols')
+    if feature_cols is not None:
+        if verbose:
+            print(f"  Selecting {len(feature_cols)} features from {data.shape[1]} columns: {feature_cols}")
+        data = select_features(data, feature_cols)
+
+    feature_dim = data.shape[1]
+    if not (0 <= target_col < feature_dim):
+        raise ValueError(
+            f"target_col must be in [0, {feature_dim}), got {target_col}"
+        )
+
     # Preprocess data - use ratio-based or year-based splitting
-    if 'train_ratio' in config['data']:
+    if 'train_ratio' in data_config:
         # Ratio-based splitting (for hourly data)
         processed = preprocess_data_ratio(
             data,
             dates=dates,
-            train_ratio=config['data']['train_ratio'],
-            val_ratio=config['data']['val_ratio'],
-            test_ratio=config['data']['test_ratio']
+            train_ratio=data_config['train_ratio'],
+            val_ratio=data_config['val_ratio'],
+            test_ratio=data_config['test_ratio'],
+            target_col=target_col,
         )
         if verbose:
             split_info = processed['split_info']
@@ -538,8 +579,9 @@ def run_experiment(
         processed = preprocess_data(
             data,
             dates=dates,
-            train_end_year=config['data']['train_end_year'],
-            val_end_year=config['data']['val_end_year']
+            train_end_year=data_config['train_end_year'],
+            val_end_year=data_config['val_end_year'],
+            target_col=target_col,
         )
         if verbose:
             split_info = processed['split_info']
@@ -557,17 +599,17 @@ def run_experiment(
     test_norm, _ = normalize_data(test_data, stats=stats)
 
     # Create datasets
-    window_size = config['data']['window_size']
+    window_size = data_config['window_size']
 
     # Raw datasets (for quaternion models with internal RevIN)
-    train_dataset_raw = SP500Dataset(train_data, window_size=window_size)
-    val_dataset_raw = SP500Dataset(val_data, window_size=window_size)
-    test_dataset_raw = SP500Dataset(test_data, window_size=window_size)
+    train_dataset_raw = SP500Dataset(train_data, window_size=window_size, target_col=target_col)
+    val_dataset_raw = SP500Dataset(val_data, window_size=window_size, target_col=target_col)
+    test_dataset_raw = SP500Dataset(test_data, window_size=window_size, target_col=target_col)
 
     # Normalized datasets (for real LSTM / naive models)
-    train_dataset_norm = SP500Dataset(train_norm, window_size=window_size)
-    val_dataset_norm = SP500Dataset(val_norm, window_size=window_size)
-    test_dataset_norm = SP500Dataset(test_norm, window_size=window_size)
+    train_dataset_norm = SP500Dataset(train_norm, window_size=window_size, target_col=target_col)
+    val_dataset_norm = SP500Dataset(val_norm, window_size=window_size, target_col=target_col)
+    test_dataset_norm = SP500Dataset(test_norm, window_size=window_size, target_col=target_col)
 
     # Create data loaders for both paths
     batch_size = config['training']['batch_size']
@@ -627,7 +669,9 @@ def run_experiment(
                 variant_name=variant_name,
                 fast_mode=fast_mode,
                 flat_threshold_fraction=flat_threshold_fraction,
-                needs_denorm=needs_denorm
+                needs_denorm=needs_denorm,
+                target_col=target_col,
+                feature_dim=feature_dim,
             )
             variant_results.append(result)
 

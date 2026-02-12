@@ -1,12 +1,13 @@
 """
 Data preprocessing module.
 
-Provides normalization, temporal splitting, and quaternion encoding functions.
+Provides normalization, temporal splitting, quaternion encoding,
+and feature selection functions.
 """
 
 import torch
 import pandas as pd
-from typing import Tuple, Dict, Union
+from typing import List, Optional, Tuple, Dict, Union
 
 
 def normalize_data(
@@ -138,6 +139,25 @@ def temporal_split_ratio(
     return train_data, val_data, test_data, split_info
 
 
+def select_features(
+    data: torch.Tensor,
+    feature_cols: Optional[List[int]] = None,
+) -> torch.Tensor:
+    """
+    Select a subset of feature columns from a data tensor.
+
+    Args:
+        data: Tensor of shape (N, num_features).
+        feature_cols: List of column indices to keep. If None, returns data unchanged.
+
+    Returns:
+        Tensor of shape (N, len(feature_cols)) or (N, num_features) if feature_cols is None.
+    """
+    if feature_cols is None:
+        return data
+    return data[:, feature_cols]
+
+
 def encode_quaternion(ohlc: torch.Tensor) -> torch.Tensor:
     """
     Encode OHLC data as quaternions.
@@ -172,7 +192,8 @@ def preprocess_data(
     data: torch.Tensor,
     dates: pd.DatetimeIndex,
     train_end_year: int = 2018,
-    val_end_year: int = 2021
+    val_end_year: int = 2021,
+    target_col: int = 3
 ) -> Dict:
     """
     Complete preprocessing pipeline: split, encode.
@@ -187,6 +208,7 @@ def preprocess_data(
         dates: DatetimeIndex corresponding to data rows.
         train_end_year: Last year of training data.
         val_end_year: Last year of validation data.
+        target_col: Target feature index used for return statistics.
 
     Returns:
         Dictionary containing:
@@ -206,8 +228,10 @@ def preprocess_data(
     norm_stats = {}
     norm_stats['mean'] = train_raw.mean(dim=0)
     norm_stats['std'] = train_raw.std(dim=0).clamp(min=1e-6)
-    train_close = train_raw[:, 3]
-    train_returns = (train_close[1:] - train_close[:-1]) / (train_close[:-1].abs() + 1e-8)
+    if not (0 <= target_col < train_raw.shape[1]):
+        raise ValueError(f"target_col must be in [0, {train_raw.shape[1]}), got {target_col}")
+    train_target = train_raw[:, target_col]
+    train_returns = (train_target[1:] - train_target[:-1]) / (train_target[:-1].abs() + 1e-8)
     norm_stats['return_std'] = train_returns.std().item()
 
     # Step 3: Quaternion encoding (semantic transformation)
@@ -229,7 +253,8 @@ def preprocess_data_ratio(
     dates: pd.DatetimeIndex,
     train_ratio: float = 0.70,
     val_ratio: float = 0.10,
-    test_ratio: float = 0.20
+    test_ratio: float = 0.20,
+    target_col: int = 3
 ) -> Dict:
     """
     Complete preprocessing pipeline with ratio-based splitting: split, encode.
@@ -245,6 +270,7 @@ def preprocess_data_ratio(
         train_ratio: Fraction of data for training (default: 0.70).
         val_ratio: Fraction of data for validation (default: 0.10).
         test_ratio: Fraction of data for testing (default: 0.20).
+        target_col: Target feature index used for return statistics.
 
     Returns:
         Dictionary containing:
@@ -264,8 +290,10 @@ def preprocess_data_ratio(
     norm_stats = {}
     norm_stats['mean'] = train_raw.mean(dim=0)
     norm_stats['std'] = train_raw.std(dim=0).clamp(min=1e-6)
-    train_close = train_raw[:, 3]
-    train_returns = (train_close[1:] - train_close[:-1]) / (train_close[:-1].abs() + 1e-8)
+    if not (0 <= target_col < train_raw.shape[1]):
+        raise ValueError(f"target_col must be in [0, {train_raw.shape[1]}), got {target_col}")
+    train_target = train_raw[:, target_col]
+    train_returns = (train_target[1:] - train_target[:-1]) / (train_target[:-1].abs() + 1e-8)
     norm_stats['return_std'] = train_returns.std().item()
 
     # Step 3: Quaternion encoding (semantic transformation)
