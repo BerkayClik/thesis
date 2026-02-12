@@ -1,4 +1,4 @@
-# BNB 4-Hourly — LunarCrush 18-column dataset (resampled from hourly)
+# BNB 4-Hourly — OHLC features (close, high, low, open)
 data:
   source: "lunarcrush"
   coin: "bnb"
@@ -37,5 +37,5 @@ evaluation:
 device: "cuda"
 
 output:
-  results_dir: "experiments/results/4hourly_bnb"
-  checkpoint_dir: "checkpoints/4hourly_bnb"
+  results_dir: "experiments/results/4hourly_bnb_ohlc"
+  checkpoint_dir: "checkpoints/4hourly_bnb_ohlc"

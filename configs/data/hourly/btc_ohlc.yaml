@@ -1,4 +1,4 @@
-# Bitcoin (BTC) Hourly — LunarCrush 18-column dataset
+# Bitcoin (BTC) Hourly — OHLC features (close, high, low, open)
 data:
   source: "lunarcrush"
   coin: "btc"
@@ -37,5 +37,5 @@ evaluation:
 device: "cuda"
 
 output:
-  results_dir: "experiments/results/hourly_btc"
-  checkpoint_dir: "checkpoints/hourly_btc"
+  results_dir: "experiments/results/hourly_btc_ohlc"
+  checkpoint_dir: "checkpoints/hourly_btc_ohlc"

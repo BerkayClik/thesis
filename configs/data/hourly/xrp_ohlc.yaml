@@ -1,4 +1,4 @@
-# XRP Hourly — LunarCrush 18-column dataset
+# XRP Hourly — OHLC features (close, high, low, open)
 data:
   source: "lunarcrush"
   coin: "xrp"
@@ -37,5 +37,5 @@ evaluation:
 device: "cuda"
 
 output:
-  results_dir: "experiments/results/hourly_xrp"
-  checkpoint_dir: "checkpoints/hourly_xrp"
+  results_dir: "experiments/results/hourly_xrp_ohlc"
+  checkpoint_dir: "checkpoints/hourly_xrp_ohlc"

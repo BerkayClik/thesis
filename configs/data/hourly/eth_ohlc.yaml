@@ -1,4 +1,4 @@
-# Ethereum (ETH) Hourly — LunarCrush 18-column dataset
+# Ethereum (ETH) Hourly — OHLC features (close, high, low, open)
 data:
   source: "lunarcrush"
   coin: "eth"
@@ -37,5 +37,5 @@ evaluation:
 device: "cuda"
 
 output:
-  results_dir: "experiments/results/hourly_eth"
-  checkpoint_dir: "checkpoints/hourly_eth"
+  results_dir: "experiments/results/hourly_eth_ohlc"
+  checkpoint_dir: "checkpoints/hourly_eth_ohlc"

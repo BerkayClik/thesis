@@ -1,0 +1,70 @@
+# Daily interval comparison — 7 models, single seed
+# Usage: python experiments/run_experiments.py --base-config configs/data/daily/{coin}_{ohlc,lunar}.yaml --experiment-config configs/experiments/daily_comparison.yaml
+
+experiment:
+  name: "daily_comparison"
+  description: "Compare real-valued and quaternion LSTM models on daily data"
+  seeds: [42]
+
+  variants:
+    # === NAIVE BASELINE ===
+    - name: "naive_zero"
+      model:
+        type: "naive_zero"
+        hidden_size: 1
+        num_layers: 1
+        dropout: 0.0
+
+    # === BASELINE MODELS ===
+    - name: "real_lstm"
+      model:
+        type: "real_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "real_lstm_attention"
+      model:
+        type: "real_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    # === PARAMETER-MATCHED QUATERNION MODELS ===
+    - name: "quaternion_lstm_param_matched"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+    - name: "quaternion_lstm_attention_param_matched"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+    # === LAYER-MATCHED QUATERNION MODELS ===
+    - name: "quaternion_lstm"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+    - name: "quaternion_lstm_attention"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+output:
+  results_dir: "experiments/results"
+  save_predictions: true
+  save_attention_weights: true

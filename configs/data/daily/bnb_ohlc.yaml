@@ -1,4 +1,4 @@
-# BNB Daily — LunarCrush 18-column dataset
+# BNB Daily — OHLC features (close, high, low, open)
 data:
   source: "lunarcrush"
   coin: "bnb"
@@ -37,5 +37,5 @@ evaluation:
 device: "cuda"
 
 output:
-  results_dir: "experiments/results/daily_bnb"
-  checkpoint_dir: "checkpoints/daily_bnb"
+  results_dir: "experiments/results/daily_bnb_ohlc"
+  checkpoint_dir: "checkpoints/daily_bnb_ohlc"

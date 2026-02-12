@@ -1,4 +1,4 @@
-# Solana (SOL) Daily — LunarCrush 18-column dataset
+# Solana (SOL) Daily — OHLC features (close, high, low, open)
 data:
   source: "lunarcrush"
   coin: "sol"
@@ -37,5 +37,5 @@ evaluation:
 device: "cuda"
 
 output:
-  results_dir: "experiments/results/daily_sol"
-  checkpoint_dir: "checkpoints/daily_sol"
+  results_dir: "experiments/results/daily_sol_ohlc"
+  checkpoint_dir: "checkpoints/daily_sol_ohlc"

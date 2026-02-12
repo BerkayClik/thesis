@@ -1,17 +1,15 @@
-# Bitcoin (BTC) Daily — OHLC features (close, high, low, open)
+# Solana (SOL) 4-Hourly — Lunar sentiment features (interactions, sentiment, close, galaxy_score)
 data:
   source: "lunarcrush"
-  coin: "btc"
-  data_path: "data/cache/lunarcrush_btc_day_full.csv"
+  coin: "sol"
+  data_path: "data/cache/lunarcrush_sol_4hour_full.csv"
   cache_dir: "data/cache"
   num_features: 18
-  # Feature selection for 4-feature quaternion models: close, high, low, open
-  feature_cols: [9, 11, 12, 15]
-  # Window settings
-  window_size: 20
-  # target_col is relative to feature_cols (close=0 after selection)
-  target_col: 0
-  # Split ratios
+  # Feature selection: interactions, sentiment, close, galaxy_score
+  feature_cols: [2, 5, 9, 10]
+  window_size: 30
+  # target_col is relative to feature_cols (close=2 after selection)
+  target_col: 2
   train_ratio: 0.70
   val_ratio: 0.10
   test_ratio: 0.20
@@ -25,7 +23,7 @@ model:
 training:
   batch_size: 32
   num_epochs: 100
-  learning_rate: 0.001
+  learning_rate: 0.0005
   patience: 10
   seed: 42
   max_grad_norm: 1.0
@@ -41,5 +39,5 @@ evaluation:
 device: "cuda"
 
 output:
-  results_dir: "experiments/results/daily_btc_ohlc"
-  checkpoint_dir: "checkpoints/daily_btc_ohlc"
+  results_dir: "experiments/results/4hourly_sol_lunar"
+  checkpoint_dir: "checkpoints/4hourly_sol_lunar"

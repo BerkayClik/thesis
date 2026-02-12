@@ -1,4 +1,4 @@
-# Solana (SOL) 4-Hourly — LunarCrush 18-column dataset (resampled from hourly)
+# Solana (SOL) 4-Hourly — OHLC features (close, high, low, open)
 data:
   source: "lunarcrush"
   coin: "sol"
@@ -37,5 +37,5 @@ evaluation:
 device: "cuda"
 
 output:
-  results_dir: "experiments/results/4hourly_sol"
-  checkpoint_dir: "checkpoints/4hourly_sol"
+  results_dir: "experiments/results/4hourly_sol_ohlc"
+  checkpoint_dir: "checkpoints/4hourly_sol_ohlc"
