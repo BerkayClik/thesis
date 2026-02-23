@@ -1,0 +1,33 @@
+# Hourly 730-day comparison — naive + real-valued baselines only
+# Usage: python experiments/run_experiments.py --base-config configs/data/hourly/btc_lunar_730d.yaml --experiment-config configs/experiments/hourly_real_only_730d.yaml
+
+experiment:
+  name: "hourly_real_only_730d"
+  description: "Naive and real-valued LSTM baselines on rolling 730-day hourly data"
+  seeds: [42]
+
+  variants:
+    - name: "naive_zero"
+      model:
+        type: "naive_zero"
+        hidden_size: 1
+        num_layers: 1
+        dropout: 0.0
+
+    - name: "real_lstm"
+      model:
+        type: "real_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "real_lstm_attention"
+      model:
+        type: "real_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+output:
+  results_dir: "experiments/results"
+  save_predictions: true

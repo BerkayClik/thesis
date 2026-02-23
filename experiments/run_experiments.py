@@ -535,6 +535,13 @@ def run_experiment(
         api_key_env=data_config.get('api_key_env', 'LUNARCRUSH_API_KEY'),
     )
 
+    # Forward-fill then backward-fill NaN values (standard for time series)
+    nan_count = df.isnull().sum().sum()
+    if nan_count > 0:
+        df = df.ffill().bfill()
+        if verbose:
+            print(f"  Filled {nan_count} NaN values via forward/backward fill")
+
     if verbose:
         interval_str = data_config.get('interval', '1d')
         resample_str = data_config.get('resample_interval')
