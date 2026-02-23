@@ -1,0 +1,43 @@
+# Bitcoin (BTC) Hourly — OHLC features over rolling 730 days
+data:
+  source: "lunarcrush"
+  coin: "btc"
+  # Local rolling slice to avoid API-key requirement at run time
+  data_path: "data/cache/lunarcrush_btc_hour_730d.csv"
+  cache_dir: "data/cache"
+  interval: "1h"
+  num_features: 18
+  feature_cols: [9, 11, 12, 15]
+  window_size: 72
+  target_col: 0
+  train_ratio: 0.70
+  val_ratio: 0.10
+  test_ratio: 0.20
+
+model:
+  type: "real_lstm"
+  hidden_size: 64
+  num_layers: 2
+  dropout: 0.1
+
+training:
+  batch_size: 32
+  num_epochs: 100
+  learning_rate: 0.001
+  patience: 10
+  seed: 42
+  max_grad_norm: 1.0
+  scheduler:
+    type: "reduce_on_plateau"
+    factor: 0.5
+    patience: 5
+
+evaluation:
+  metrics: [mape, directional_accuracy, sharpe_ratio, directional_accuracy_3class, sharpe_ratio_3class]
+  flat_threshold_fraction: 0.5
+
+device: "cuda"
+
+output:
+  results_dir: "experiments/results/hourly_btc_ohlc_730d"
+  checkpoint_dir: "checkpoints/hourly_btc_ohlc_730d"
