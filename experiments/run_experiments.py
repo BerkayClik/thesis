@@ -870,9 +870,15 @@ def main():
         print("DEBUG MODE ENABLED - Tracking gradients and weight statistics")
         print()
 
-    # Get output settings
-    output_dir = experiment_config.get('output', {}).get('results_dir', 'experiments/results')
-    experiment_name = experiment_config['experiment']['name']
+    # Get output settings - prefer base (data) config's output.results_dir so results
+    # land where the analysis notebooks expect them
+    base_output = base_config.get('output', {}).get('results_dir')
+    if base_output:
+        output_dir = base_output
+        experiment_name = os.path.basename(base_output)
+    else:
+        output_dir = experiment_config.get('output', {}).get('results_dir', 'experiments/results')
+        experiment_name = experiment_config['experiment']['name']
 
     # Run experiments with rolling save
     results = run_experiment(
