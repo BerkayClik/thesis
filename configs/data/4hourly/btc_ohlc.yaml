@@ -4,6 +4,7 @@ data:
   coin: "btc"
   data_path: "data/cache/lunarcrush_btc_4hour_full.csv"
   cache_dir: "data/cache"
+  last_n_days: 365
   num_features: 18
   feature_cols: [9, 11, 12, 15]
   window_size: 30

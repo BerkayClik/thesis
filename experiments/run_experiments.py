@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from torch.utils.data import DataLoader
 import numpy as np
+import pandas as pd
 from scipy import stats
 
 # Add src to path
@@ -534,6 +535,15 @@ def run_experiment(
         api_key=data_config.get('api_key'),
         api_key_env=data_config.get('api_key_env', 'LUNARCRUSH_API_KEY'),
     )
+
+    # Filter to last N days if specified
+    last_n_days = data_config.get('last_n_days')
+    if last_n_days is not None:
+        cutoff_date = df.index.max() - pd.Timedelta(days=last_n_days)
+        original_len = len(df)
+        df = df[df.index >= cutoff_date]
+        if verbose:
+            print(f"  Filtered to last {last_n_days} days: {original_len} -> {len(df)} rows")
 
     # Forward-fill then backward-fill NaN values (standard for time series)
     nan_count = df.isnull().sum().sum()
