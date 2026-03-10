@@ -15,13 +15,15 @@ import torch.nn as nn
 from .quaternion_lstm import QuaternionLSTM
 from .attention import TemporalAttention
 from .revin import RevIN
+from .dish_ts import DishTS
 
 
 class QuaternionLSTMBase(nn.Module):
     """
     Base class for Quaternion LSTM models.
 
-    Contains shared components: RevIN, QLSTM backbone, projection layer, output head.
+    Contains shared components: normalization layer (RevIN or Dish-TS),
+    QLSTM backbone, projection layer, output head.
     Subclasses implement specific forward() logic.
 
     Args:
@@ -29,8 +31,12 @@ class QuaternionLSTMBase(nn.Module):
         num_layers: Number of Quaternion LSTM layers.
         dropout: Dropout rate.
         input_size: Number of input quaternion features (default: 1 for legacy).
-        num_features: Number of features for RevIN normalization.
+        num_features: Number of features for normalization.
         target_col: Index of target feature for scalar denormalization.
+        norm_type: Normalization strategy: ``'revin'`` or ``'dish_ts'``.
+        seq_len: Lookback window length (required for Dish-TS).
+        dish_init: Dish-TS ``reduce_mlayer`` initialization strategy.
+            One of ``'standard'``, ``'avg'``, ``'uniform'``.
     """
 
     def __init__(
@@ -40,7 +46,10 @@ class QuaternionLSTMBase(nn.Module):
         dropout: float = 0.0,
         input_size: int = 1,
         num_features: int = 4,
-        target_col: int = 3
+        target_col: int = 3,
+        norm_type: str = "revin",
+        seq_len: int = 20,
+        dish_init: str = "standard",
     ):
         super().__init__()
         self.hidden_size = hidden_size
@@ -48,7 +57,15 @@ class QuaternionLSTMBase(nn.Module):
         self.input_size = input_size
         self.target_col = target_col
 
-        self.revin = RevIN(num_features)
+        # Normalization layer (swappable)
+        if norm_type == "dish_ts":
+            self.norm_layer = DishTS(
+                num_features=num_features,
+                seq_len=seq_len,
+                dish_init=dish_init,
+            )
+        else:
+            self.norm_layer = RevIN(num_features)
 
         # Quaternion LSTM backbone
         self.qlstm = QuaternionLSTM(
@@ -92,8 +109,11 @@ class QNNAttentionModel(QuaternionLSTMBase):
         num_layers: Number of Quaternion LSTM layers.
         dropout: Dropout rate.
         input_size: Number of input quaternion features (default: 1 for single OHLC quaternion).
-        num_features: Number of features for RevIN normalization.
+        num_features: Number of features for normalization.
         target_col: Index of target feature for scalar denormalization.
+        norm_type: Normalization strategy: ``'revin'`` or ``'dish_ts'``.
+        seq_len: Lookback window length (required for Dish-TS).
+        dish_init: Dish-TS ``reduce_mlayer`` initialization strategy.
     """
 
     def __init__(
@@ -103,9 +123,15 @@ class QNNAttentionModel(QuaternionLSTMBase):
         dropout: float = 0.0,
         input_size: int = 1,
         num_features: int = 4,
-        target_col: int = 3
+        target_col: int = 3,
+        norm_type: str = "revin",
+        seq_len: int = 20,
+        dish_init: str = "standard",
     ):
-        super().__init__(hidden_size, num_layers, dropout, input_size, num_features, target_col)
+        super().__init__(
+            hidden_size, num_layers, dropout, input_size, num_features,
+            target_col, norm_type, seq_len, dish_init,
+        )
         self.attention = TemporalAttention(hidden_size)
 
     def forward(
@@ -125,7 +151,7 @@ class QNNAttentionModel(QuaternionLSTMBase):
             Optionally attention weights of shape (batch, seq_len).
         """
         # Instance normalization
-        x = self.revin(x, 'norm')
+        x = self.norm_layer(x, 'norm')
 
         batch_size, seq_len, _ = x.size()
 
@@ -147,7 +173,7 @@ class QNNAttentionModel(QuaternionLSTMBase):
         output = self.output_head(context)
 
         # Reverse normalization to original scale
-        output = self.revin.denorm_scalar(output, self.target_col)
+        output = self.norm_layer.denorm_scalar(output, self.target_col)
 
         if return_attention:
             return output, attention_weights
@@ -165,8 +191,11 @@ class QuaternionLSTMNoAttention(QuaternionLSTMBase):
         num_layers: Number of Quaternion LSTM layers.
         dropout: Dropout rate.
         input_size: Number of input quaternion features (default: 1 for single OHLC quaternion).
-        num_features: Number of features for RevIN normalization.
+        num_features: Number of features for normalization.
         target_col: Index of target feature for scalar denormalization.
+        norm_type: Normalization strategy: ``'revin'`` or ``'dish_ts'``.
+        seq_len: Lookback window length (required for Dish-TS).
+        dish_init: Dish-TS ``reduce_mlayer`` initialization strategy.
     """
 
     def __init__(
@@ -176,9 +205,15 @@ class QuaternionLSTMNoAttention(QuaternionLSTMBase):
         dropout: float = 0.0,
         input_size: int = 1,
         num_features: int = 4,
-        target_col: int = 3
+        target_col: int = 3,
+        norm_type: str = "revin",
+        seq_len: int = 20,
+        dish_init: str = "standard",
     ):
-        super().__init__(hidden_size, num_layers, dropout, input_size, num_features, target_col)
+        super().__init__(
+            hidden_size, num_layers, dropout, input_size, num_features,
+            target_col, norm_type, seq_len, dish_init,
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -191,7 +226,7 @@ class QuaternionLSTMNoAttention(QuaternionLSTMBase):
             Prediction of shape (batch, 1) in original price scale.
         """
         # Instance normalization
-        x = self.revin(x, 'norm')
+        x = self.norm_layer(x, 'norm')
 
         batch_size = x.size(0)
 
@@ -208,6 +243,6 @@ class QuaternionLSTMNoAttention(QuaternionLSTMBase):
         output = self.output_head(projected)
 
         # Reverse normalization to original scale
-        output = self.revin.denorm_scalar(output, self.target_col)
+        output = self.norm_layer.denorm_scalar(output, self.target_col)
 
         return output

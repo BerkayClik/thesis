@@ -132,9 +132,27 @@ def create_model(
     dropout: float = 0.0,
     input_size: int = 4,
     num_features: int = 4,
-    target_col: int = 3
+    target_col: int = 3,
+    norm_type: str = "revin",
+    seq_len: int = 20,
+    dish_init: str = "standard",
 ):
-    """Create model based on type string."""
+    """Create model based on type string.
+
+    Args:
+        model_type: Model architecture identifier.
+        hidden_size: Hidden dimension size.
+        num_layers: Number of recurrent layers.
+        dropout: Dropout rate.
+        input_size: Number of input features (for real LSTM models).
+        num_features: Number of features for normalization layers.
+        target_col: Index of the target feature for denormalization.
+        norm_type: Normalization strategy for quaternion models:
+            ``'revin'`` (default) or ``'dish_ts'``.
+        seq_len: Lookback window length (required for Dish-TS).
+        dish_init: Dish-TS initialization: ``'standard'``, ``'avg'``,
+            or ``'uniform'``.
+    """
     if model_type == "naive_zero":
         return NaiveBaseline(target_col=target_col)
     elif model_type == "real_lstm":
@@ -157,7 +175,10 @@ def create_model(
             num_layers=num_layers,
             dropout=dropout,
             num_features=num_features,
-            target_col=target_col
+            target_col=target_col,
+            norm_type=norm_type,
+            seq_len=seq_len,
+            dish_init=dish_init,
         )
     elif model_type == "quaternion_lstm_attention":
         return QNNAttentionModel(
@@ -165,7 +186,10 @@ def create_model(
             num_layers=num_layers,
             dropout=dropout,
             num_features=num_features,
-            target_col=target_col
+            target_col=target_col,
+            norm_type=norm_type,
+            seq_len=seq_len,
+            dish_init=dish_init,
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
@@ -359,6 +383,7 @@ def run_single_experiment(
     set_seed(seed, fast_mode=fast_mode)
 
     # Create model
+    window_size = config['data']['window_size']
     model = create_model(
         model_type=model_config['type'],
         hidden_size=model_config.get('hidden_size', 64),
@@ -367,6 +392,9 @@ def run_single_experiment(
         input_size=feature_dim,
         num_features=feature_dim,
         target_col=target_col,
+        norm_type=model_config.get('norm_type', 'revin'),
+        seq_len=window_size,
+        dish_init=model_config.get('dish_init', 'standard'),
     )
 
     # Compile model for faster execution (PyTorch 2.0+)
@@ -655,11 +683,13 @@ def run_experiment(
         if verbose:
             print(f"\nRunning variant: {variant_name}")
 
-        # Select data path based on model type
-        uses_revin = 'quaternion' in model_config['type']
-        needs_denorm = not uses_revin
+        # Select data path based on model type.
+        # Quaternion models use internal normalization (RevIN or Dish-TS)
+        # and receive raw data; real LSTM / naive models use Z-score normalized data.
+        has_internal_norm = 'quaternion' in model_config['type']
+        needs_denorm = not has_internal_norm
 
-        if uses_revin:
+        if has_internal_norm:
             cur_train_loader = train_loader_raw
             cur_val_loader = val_loader_raw
             cur_test_loader = test_loader_raw

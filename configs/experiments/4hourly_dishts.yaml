@@ -1,0 +1,118 @@
+# 4-Hourly interval Dish-TS comparison — RevIN vs Dish-TS, single seed
+# Includes baselines and RevIN quaternion variants for direct comparison.
+# Usage: python experiments/run_experiments.py \
+#   --base-config configs/data/4hourly/{coin}_{ohlc,lunar}.yaml \
+#   --experiment-config configs/experiments/4hourly_dishts.yaml
+
+experiment:
+  name: "4hourly_dishts"
+  description: "Compare RevIN vs Dish-TS normalization on 4-hourly data"
+  seeds: [42]
+
+  variants:
+    # === BASELINES (reference) ===
+    - name: "naive_zero"
+      model:
+        type: "naive_zero"
+        hidden_size: 1
+        num_layers: 1
+        dropout: 0.0
+
+    - name: "real_lstm"
+      model:
+        type: "real_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "real_lstm_attention"
+      model:
+        type: "real_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    # === REVIN — PARAMETER-MATCHED ===
+    - name: "qlstm_revin_param"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+        norm_type: "revin"
+      learning_rate: 0.0005
+
+    - name: "qlstm_attn_revin_param"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+        norm_type: "revin"
+      learning_rate: 0.0005
+
+    # === DISH-TS (standard init) — PARAMETER-MATCHED ===
+    - name: "qlstm_dishts_param"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+        norm_type: "dish_ts"
+        dish_init: "standard"
+      learning_rate: 0.0005
+
+    - name: "qlstm_attn_dishts_param"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+        norm_type: "dish_ts"
+        dish_init: "standard"
+      learning_rate: 0.0005
+
+    # === REVIN — LAYER-MATCHED ===
+    - name: "qlstm_revin_layer"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+        norm_type: "revin"
+      learning_rate: 0.0005
+
+    - name: "qlstm_attn_revin_layer"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+        norm_type: "revin"
+      learning_rate: 0.0005
+
+    # === DISH-TS (standard init) — LAYER-MATCHED ===
+    - name: "qlstm_dishts_layer"
+      model:
+        type: "quaternion_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+        norm_type: "dish_ts"
+        dish_init: "standard"
+      learning_rate: 0.0005
+
+    - name: "qlstm_attn_dishts_layer"
+      model:
+        type: "quaternion_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+        norm_type: "dish_ts"
+        dish_init: "standard"
+      learning_rate: 0.0005
+
+output:
+  results_dir: "experiments/results"
+  save_predictions: true
+  save_attention_weights: true
