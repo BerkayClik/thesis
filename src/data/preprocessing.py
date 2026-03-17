@@ -234,15 +234,10 @@ def preprocess_data(
     train_returns = (train_target[1:] - train_target[:-1]) / (train_target[:-1].abs() + 1e-8)
     norm_stats['return_std'] = train_returns.std().item()
 
-    # Step 3: Quaternion encoding (semantic transformation)
-    train_quat = encode_quaternion(train_raw)
-    val_quat = encode_quaternion(val_raw)
-    test_quat = encode_quaternion(test_raw)
-
     return {
-        'train_data': train_quat,
-        'val_data': val_quat,
-        'test_data': test_quat,
+        'train_data': train_raw,
+        'val_data': val_raw,
+        'test_data': test_raw,
         'norm_stats': norm_stats,
         'split_info': split_info
     }
@@ -296,15 +291,10 @@ def preprocess_data_ratio(
     train_returns = (train_target[1:] - train_target[:-1]) / (train_target[:-1].abs() + 1e-8)
     norm_stats['return_std'] = train_returns.std().item()
 
-    # Step 3: Quaternion encoding (semantic transformation)
-    train_quat = encode_quaternion(train_raw)
-    val_quat = encode_quaternion(val_raw)
-    test_quat = encode_quaternion(test_raw)
-
     return {
-        'train_data': train_quat,
-        'val_data': val_quat,
-        'test_data': test_quat,
+        'train_data': train_raw,
+        'val_data': val_raw,
+        'test_data': test_raw,
         'norm_stats': norm_stats,
         'split_info': split_info
     }

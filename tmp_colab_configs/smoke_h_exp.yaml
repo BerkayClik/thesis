@@ -1,0 +1,25 @@
+experiment:
+  name: 4hourly_hierarchical_quaternion
+  description: Compare 16-feature real-valued and hierarchical quaternion models on
+    BTC 4-hourly LunarCrush data
+  seeds:
+  - 42
+  variants:
+  - name: hierarchical_quaternion_lstm
+    model:
+      type: hierarchical_quaternion_lstm
+      hidden_size: 64
+      num_layers: 1
+      dropout: 0.1
+    learning_rate: 0.0005
+  - name: hierarchical_quaternion_lstm_attention
+    model:
+      type: hierarchical_quaternion_lstm_attention
+      hidden_size: 64
+      num_layers: 1
+      dropout: 0.1
+    learning_rate: 0.0005
+output:
+  results_dir: experiments/results
+  save_predictions: true
+  save_attention_weights: true
