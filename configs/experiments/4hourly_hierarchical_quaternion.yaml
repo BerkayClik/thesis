@@ -1,0 +1,50 @@
+# 4-Hourly BTC hierarchical quaternion comparison
+# Usage: python experiments/run_experiments.py --base-config configs/data/4hourly/btc_lunar_hierarchy.yaml --experiment-config configs/experiments/4hourly_hierarchical_quaternion.yaml
+
+experiment:
+  name: "4hourly_hierarchical_quaternion"
+  description: "Compare 16-feature real-valued and hierarchical quaternion models on BTC 4-hourly LunarCrush data"
+  seeds: [42, 123, 456]
+
+  variants:
+    - name: "naive_zero"
+      model:
+        type: "naive_zero"
+        hidden_size: 1
+        num_layers: 1
+        dropout: 0.0
+
+    - name: "real_lstm_16"
+      model:
+        type: "real_lstm"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "real_lstm_attention_16"
+      model:
+        type: "real_lstm_attention"
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.1
+
+    - name: "hierarchical_quaternion_lstm"
+      model:
+        type: "hierarchical_quaternion_lstm"
+        hidden_size: 64
+        num_layers: 1
+        dropout: 0.1
+      learning_rate: 0.0005
+
+    - name: "hierarchical_quaternion_lstm_attention"
+      model:
+        type: "hierarchical_quaternion_lstm_attention"
+        hidden_size: 64
+        num_layers: 1
+        dropout: 0.1
+      learning_rate: 0.0005
+
+output:
+  results_dir: "experiments/results"
+  save_predictions: true
+  save_attention_weights: true

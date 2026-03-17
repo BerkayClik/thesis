@@ -25,7 +25,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.data.loader import load_sp500_data, dataframe_to_tensor
 from src.data.preprocessing import preprocess_data, preprocess_data_ratio, normalize_data, select_features
 from src.data.dataset import SP500Dataset
-from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel
+from src.models import (
+    HierarchicalQNNAttentionModel,
+    HierarchicalQuaternionLSTMNoAttention,
+    QNNAttentionModel,
+    RealLSTM,
+    RealLSTMAttention,
+)
 from src.models.qnn_attention_model import QuaternionLSTMNoAttention
 from src.training.trainer import Trainer
 from src.training.losses import mse_loss
@@ -185,6 +191,30 @@ def create_model(
             hidden_size=hidden_size,
             num_layers=num_layers,
             dropout=dropout,
+            num_features=num_features,
+            target_col=target_col,
+            norm_type=norm_type,
+            seq_len=seq_len,
+            dish_init=dish_init,
+        )
+    elif model_type == "hierarchical_quaternion_lstm":
+        return HierarchicalQuaternionLSTMNoAttention(
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
+            input_size=input_size,
+            num_features=num_features,
+            target_col=target_col,
+            norm_type=norm_type,
+            seq_len=seq_len,
+            dish_init=dish_init,
+        )
+    elif model_type == "hierarchical_quaternion_lstm_attention":
+        return HierarchicalQNNAttentionModel(
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
+            input_size=input_size,
             num_features=num_features,
             target_col=target_col,
             norm_type=norm_type,
