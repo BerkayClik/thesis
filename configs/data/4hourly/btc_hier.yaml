@@ -1,0 +1,49 @@
+# Bitcoin (BTC) 4-Hourly — Hierarchical 16-feature quaternion groups
+# Groups: Price(open,high,low,close) | Market(vol,mcap,dom,supply) | Social(contributors,posts) | Sentiment(sent,galaxy,social_dom,interactions)
+data:
+  source: "lunarcrush"
+  coin: "btc"
+  data_path: "data/cache/lunarcrush_btc_4hour_full.csv"
+  cache_dir: "data/cache"
+  last_n_days: 365
+  num_features: 18
+  # 16 features ordered by semantic group (4 per quaternion):
+  #   [0:4]   Price:     open(15), high(11), low(12), close(9)
+  #   [4:8]   Market:    volume_24h(17), market_cap(13), market_dominance(14), circulating_supply(8)
+  #   [8:12]  Social:    contributors_active(0), contributors_created(1), posts_active(3), posts_created(4)
+  #   [12:16] Sentiment: sentiment(5), galaxy_score(10), social_dominance(16), interactions(2)
+  feature_cols: [15, 11, 12, 9, 17, 13, 14, 8, 0, 1, 3, 4, 5, 10, 16, 2]
+  window_size: 30
+  # target_col relative to selected features: close is at index 3
+  target_col: 3
+  train_ratio: 0.70
+  val_ratio: 0.10
+  test_ratio: 0.20
+
+model:
+  type: "hier_qlstm_concat"
+  hidden_size: 32
+  num_layers: 2
+  dropout: 0.1
+
+training:
+  batch_size: 32
+  num_epochs: 100
+  learning_rate: 0.0005
+  patience: 10
+  seed: 42
+  max_grad_norm: 1.0
+  scheduler:
+    type: "reduce_on_plateau"
+    factor: 0.5
+    patience: 5
+
+evaluation:
+  metrics: [mape, directional_accuracy, sharpe_ratio, directional_accuracy_3class, sharpe_ratio_3class]
+  flat_threshold_fraction: 0.5
+
+device: "cuda"
+
+output:
+  results_dir: "experiments/results/4hourly_btc_hier"
+  checkpoint_dir: "checkpoints/4hourly_btc_hier"
