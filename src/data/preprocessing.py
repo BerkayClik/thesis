@@ -158,34 +158,25 @@ def select_features(
     return data[:, feature_cols]
 
 
-def encode_quaternion(ohlc: torch.Tensor) -> torch.Tensor:
+def encode_quaternion(data: torch.Tensor) -> torch.Tensor:
     """
-    Encode OHLC data as quaternions.
+    Semantic marker: data is ready for quaternion processing.
 
-    Mapping: q_t = O_t + H_t * i + L_t * j + C_t * k
-
-    The quaternion components are stored as:
-    [real, i, j, k] = [Open, High, Low, Close]
+    Accepts tensors whose last dimension is any multiple of 4.
+    For 4 features (OHLC):  single quaternion  q = O + Hi + Lj + Ck.
+    For 16 features (hierarchical): 4 quaternions, grouped by the caller.
 
     Args:
-        ohlc: Tensor of shape (..., 4) with [Open, High, Low, Close].
+        data: Tensor of shape (..., F) where F % 4 == 0.
 
     Returns:
-        Tensor of same shape, interpreted as quaternion components [r, i, j, k].
-
-    Note:
-        While the output tensor has the same shape as input, this function
-        serves as a semantic transformation marking the data as quaternion-encoded.
-        The actual quaternion operations are performed in quaternion_ops.py.
+        Clone of input tensor, semantically marked as quaternion-encoded.
     """
-    if ohlc.shape[-1] != 4:
-        raise ValueError(f"Expected 4 features (OHLC), got {ohlc.shape[-1]}")
-
-    # OHLC naturally maps to quaternion components:
-    # q = O + H*i + L*j + C*k
-    # This is a semantic transformation - the data layout is already correct
-    # [Open, High, Low, Close] -> [real, i, j, k]
-    return ohlc.clone()
+    if data.shape[-1] % 4 != 0:
+        raise ValueError(
+            f"Feature count must be divisible by 4, got {data.shape[-1]}"
+        )
+    return data.clone()
 
 
 def preprocess_data(

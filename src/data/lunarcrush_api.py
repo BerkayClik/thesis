@@ -43,6 +43,25 @@ LUNARCRUSH_ALL_COLUMNS: List[str] = [
 # Default feature columns for 4-feature quaternion models: close, high, low, open
 QUATERNION_FEATURE_COLS: List[int] = [9, 11, 12, 15]
 
+# Hierarchical 16-feature quaternion groups (4 groups × 4 features).
+# Features are ordered so that consecutive groups of 4 form semantic quaternions.
+# After selection via these indices, the 16-column layout is:
+#   [0:4]   Price:     open, high, low, close
+#   [4:8]   Market:    volume_24h, market_cap, market_dominance, circulating_supply
+#   [8:12]  Social:    contributors_active, contributors_created, posts_active, posts_created
+#   [12:16] Sentiment: sentiment, galaxy_score, social_dominance, interactions
+HIERARCHICAL_FEATURE_GROUPS: dict[str, List[int]] = {
+    "price":     [15, 11, 12, 9],   # open, high, low, close
+    "market":    [17, 13, 14, 8],   # volume_24h, market_cap, market_dominance, circulating_supply
+    "social":    [0, 1, 3, 4],      # contributors_active, contributors_created, posts_active, posts_created
+    "sentiment": [5, 10, 16, 2],    # sentiment, galaxy_score, social_dominance, interactions
+}
+
+# Flat list of all 16 hierarchical feature indices, ordered by group.
+HIERARCHICAL_FEATURE_COLS: List[int] = [
+    idx for group in HIERARCHICAL_FEATURE_GROUPS.values() for idx in group
+]
+
 # Rate-limit delay between API requests (seconds)
 _REQUEST_DELAY = 2.0
 
