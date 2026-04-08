@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.data.loader import load_sp500_data, dataframe_to_tensor
 from src.data.preprocessing import preprocess_data, preprocess_data_ratio, normalize_data, select_features
 from src.data.dataset import SP500Dataset
-from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel
+from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel, HierarchicalQLSTM
 from src.models.qnn_attention_model import QuaternionLSTMNoAttention
 from src.training.trainer import Trainer
 from src.training.losses import mse_loss
@@ -190,6 +190,34 @@ def create_model(
             norm_type=norm_type,
             seq_len=seq_len,
             dish_init=dish_init,
+        )
+    elif model_type.startswith("hier_qlstm_"):
+        suffix = model_type[len("hier_qlstm_"):]
+        _HIER_VARIANTS = {
+            "concat":              ("concat",          False),
+            "concat_attn":         ("concat",          True),
+            "group_attn":          ("group_attention",  False),
+            "group_attn_temporal": ("group_attention",  True),
+            "meta_quat":           ("meta_quaternion",  False),
+            "meta_quat_attn":      ("meta_quaternion",  True),
+        }
+        if suffix not in _HIER_VARIANTS:
+            raise ValueError(
+                f"Unknown hierarchical variant '{suffix}'. "
+                f"Choose from {list(_HIER_VARIANTS)}"
+            )
+        fusion, use_attn = _HIER_VARIANTS[suffix]
+        return HierarchicalQLSTM(
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
+            num_features=num_features,
+            target_col=target_col,
+            norm_type=norm_type,
+            seq_len=seq_len,
+            dish_init=dish_init,
+            fusion_type=fusion,
+            use_temporal_attention=use_attn,
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
@@ -405,6 +433,7 @@ def run_single_experiment(
         hasattr(torch, 'compile')
         and device.type != 'mps'
         and 'quaternion' not in model_config['type']
+        and not model_config['type'].startswith('hier_qlstm_')
     )
     if should_compile:
         try:
@@ -686,7 +715,10 @@ def run_experiment(
         # Select data path based on model type.
         # Quaternion models use internal normalization (RevIN or Dish-TS)
         # and receive raw data; real LSTM / naive models use Z-score normalized data.
-        has_internal_norm = 'quaternion' in model_config['type']
+        has_internal_norm = (
+            'quaternion' in model_config['type']
+            or model_config['type'].startswith('hier_qlstm_')
+        )
         needs_denorm = not has_internal_norm
 
         if has_internal_norm:

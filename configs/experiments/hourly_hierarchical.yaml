@@ -1,0 +1,64 @@
+# Hierarchical QLSTM comparison — 6 variants (3 fusion × 2 attention), single seed
+# Usage: python experiments/run_experiments.py --base-config configs/data/hourly/btc_hier.yaml --experiment-config configs/experiments/hourly_hierarchical.yaml
+
+experiment:
+  name: "hourly_hierarchical"
+  description: "Compare hierarchical QLSTM fusion strategies (concat, group attention, meta-quaternion) with and without temporal attention"
+  seeds: [42]
+
+  variants:
+    # === CONCAT FUSION ===
+    - name: "hier_qlstm_concat"
+      model:
+        type: "hier_qlstm_concat"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+    - name: "hier_qlstm_concat_attn"
+      model:
+        type: "hier_qlstm_concat_attn"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+    # === GROUP ATTENTION FUSION ===
+    - name: "hier_qlstm_group_attn"
+      model:
+        type: "hier_qlstm_group_attn"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+    - name: "hier_qlstm_group_attn_temporal"
+      model:
+        type: "hier_qlstm_group_attn_temporal"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+    # === META-QUATERNION FUSION ===
+    - name: "hier_qlstm_meta_quat"
+      model:
+        type: "hier_qlstm_meta_quat"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+    - name: "hier_qlstm_meta_quat_attn"
+      model:
+        type: "hier_qlstm_meta_quat_attn"
+        hidden_size: 32
+        num_layers: 2
+        dropout: 0.1
+      learning_rate: 0.0005
+
+output:
+  results_dir: "experiments/results"
+  save_predictions: true
+  save_attention_weights: true
