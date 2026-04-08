@@ -61,22 +61,44 @@ We compare four model architectures across seven experimental variants, using Bi
 +-----------------------------------------------------------------------------+
 ```
 
-### The Four Models
+### The Five Model Families
 
-| Model | OHLC Encoding | Sequence Processing | Attention |
-|-------|---------------|---------------------|-----------|
+| Model | Feature Encoding | Sequence Processing | Attention |
+|-------|-----------------|---------------------|-----------|
 | Real LSTM | 4 independent features | Standard LSTM | No |
 | Real LSTM + Attention | 4 independent features | Standard LSTM | Yes |
-| Quaternion LSTM | Single quaternion | Hamilton product | No |
-| Quaternion LSTM + Attention | Single quaternion | Hamilton product | Yes |
+| Quaternion LSTM | 4 features → 1 quaternion | Hamilton product | No |
+| Quaternion LSTM + Attention | 4 features → 1 quaternion | Hamilton product | Yes |
+| **Hierarchical QLSTM** | **16 features → 4 quaternion groups** | **4 independent QLSTMs → fusion** | **Optional per-group** |
+
+### Hierarchical Extension
+
+The hierarchical model extends the quaternion approach from 4 OHLC features to **16 LunarCrush features** (price + market + social + sentiment), grouped into 4 semantic quaternions:
+
+```
+Input (batch, seq, 16) → RevIN(16) → Split into 4 groups:
+  ├─ Q₁ (Price):     [open, high, low, close]        → QLSTM₁
+  ├─ Q₂ (Market):    [vol, mcap, dominance, supply]   → QLSTM₂
+  ├─ Q₃ (Social):    [contrib_active, created, ...]   → QLSTM₃
+  └─ Q₄ (Sentiment): [sentiment, galaxy, ...]         → QLSTM₄
+                                                            ↓
+                                              Fusion (concat / group_attn / meta_quat)
+                                                            ↓
+                                                      Output → denorm
+```
+
+Three fusion strategies tested as ablation:
+- **Concat → Linear**: simplest baseline
+- **Group Attention**: learned importance weights per group (interpretable)
+- **Meta-Quaternion**: fuse via Hamilton product (novel algebraic approach)
 
 ---
 
 ## Experimental Design
 
-### Seven Variants for Fair Comparison
+### Thirteen Variants for Fair Comparison
 
-Since quaternion layers have ~4x more parameters at equal hidden size, we test both **layer-matched** and **parameter-matched** configurations:
+Since quaternion layers have ~4x more parameters at equal hidden size, we test both **layer-matched** and **parameter-matched** configurations. The hierarchical extension adds 6 variants testing 3 fusion strategies × 2 attention modes:
 
 | Variant | Model | Hidden Size | Parameters | Purpose |
 |---------|-------|-------------|------------|---------|
@@ -87,6 +109,12 @@ Since quaternion layers have ~4x more parameters at equal hidden size, we test b
 | `quaternion_lstm_attention_param_matched` | Quaternion LSTM + Attn | 32 | ~56K | Fair comparison |
 | `quaternion_lstm` | Quaternion LSTM | 64 | ~174K | Capacity test |
 | `quaternion_lstm_attention` | Quaternion LSTM + Attn | 64 | ~179K | Capacity test |
+| `hier_qlstm_concat` | Hierarchical QLSTM (concat) | 32 | ~228K | Hierarchical baseline |
+| `hier_qlstm_concat_attn` | Hierarchical QLSTM (concat+attn) | 32 | ~228K | + temporal attention |
+| `hier_qlstm_group_attn` | Hierarchical QLSTM (group attn) | 32 | ~223K | Interpretable fusion |
+| `hier_qlstm_group_attn_temporal` | Hierarchical QLSTM (group+temporal) | 32 | ~224K | Dual attention |
+| `hier_qlstm_meta_quat` | Hierarchical QLSTM (meta-quat) | 32 | ~232K | Novel quaternion fusion |
+| `hier_qlstm_meta_quat_attn` | Hierarchical QLSTM (meta-quat+attn) | 32 | ~232K | Full model |
 
 ### Data Configuration
 
@@ -107,6 +135,8 @@ Multiple data frequencies are supported:
 | Daily | 20 days | Year-based (train/val/test by year boundaries) | `configs/data/daily/btc.yaml` |
 | Hourly | 72 bars (3 days) | Ratio-based (70/10/20) | `configs/data/hourly/btc.yaml` |
 | 4-Hourly | 30 bars (5 days) | Ratio-based (70/10/20) | `configs/data/4hourly/btc.yaml` |
+| Hourly (Hierarchical) | 72 bars (3 days) | Ratio-based (70/10/20) | `configs/data/hourly/btc_hier.yaml` |
+| 4-Hourly (Hierarchical) | 30 bars (5 days) | Ratio-based (70/10/20) | `configs/data/4hourly/btc_hier.yaml` |
 
 ### Temporal Split (No Look-Ahead Bias)
 
@@ -153,13 +183,16 @@ thesis/
 │   │   │   ├── btc.yaml              # BTC hourly (ratio-based split)
 │   │   │   ├── sp500.yaml            # S&P 500 hourly
 │   │   │   └── gold.yaml             # Gold hourly
-│   │   └── 4hourly/
-│   │       └── btc.yaml              # BTC 4-hourly (resampled from 1h)
+│   │   │   └── 4hourly/
+│   │       ├── btc.yaml              # BTC 4-hourly (resampled from 1h)
+│   │       └── btc_hier.yaml         # BTC 4-hourly hierarchical (16 features)
 │   └── experiments/                  # Experiment variant definitions
 │       ├── full_comparison.yaml      # Full 7-variant × 3-seed comparison
 │       ├── quick_test.yaml           # Quick single-seed iteration
 │       ├── daily_btc_single.yaml     # Daily BTC single-seed
-│       └── 4hourly_btc.yaml          # 4-hourly BTC experiments
+│       ├── 4hourly_btc.yaml          # 4-hourly BTC experiments
+│       ├── hourly_hierarchical.yaml  # Hourly hierarchical QLSTM (6 variants)
+│       └── 4hourly_hierarchical.yaml # 4-hourly hierarchical QLSTM (6 variants)
 │
 ├── src/
 │   ├── data/
@@ -173,6 +206,7 @@ thesis/
 │   │   ├── quaternion_ops.py         # Hamilton product & QuaternionLinear
 │   │   ├── quaternion_lstm.py        # Quaternion LSTM cell & stacked layer
 │   │   ├── qnn_attention_model.py    # Quaternion LSTM + Attention model
+│   │   ├── hierarchical_qlstm.py     # Hierarchical QLSTM (4 groups × 3 fusions)
 │   │   └── attention.py              # Temporal attention mechanism
 │   │
 │   ├── training/
@@ -191,6 +225,10 @@ thesis/
 │   ├── run_experiments.py            # Main experiment runner
 │   ├── visualize_results.py          # Results visualization
 │   └── results/                      # JSON results & checkpoints
+│
+├── notebooks/
+│   ├── Hierarchical_QLSTM_BTC_Hourly.ipynb    # Colab notebook (hourly)
+│   └── 4Hourly_Hierarchical_QLSTM_BTC.ipynb   # Colab notebook (4-hourly)
 │
 └── docs/
     ├── ARCHITECTURE.md               # Detailed technical documentation
@@ -242,6 +280,11 @@ python experiments/run_experiments.py \
 python experiments/run_experiments.py \
     --base-config configs/data/4hourly/btc.yaml \
     --experiment-config configs/experiments/4hourly_btc.yaml
+
+# Run hierarchical QLSTM experiments (4-hourly, 16 features)
+python experiments/run_experiments.py \
+    --base-config configs/data/4hourly/btc_hier.yaml \
+    --experiment-config configs/experiments/4hourly_hierarchical.yaml
 
 # Run with debug mode (gradient tracking)
 python experiments/run_experiments.py \
@@ -335,6 +378,7 @@ quaternion_lstm_param_matched       directional_accuracy     X.XXXX       X.XXX 
 - **Optimized Quaternion Ops:** QuaternionLinear uses matmul-based Hamilton product (4 matrix multiplications) instead of naive broadcast, and QuaternionLSTMCell uses fused gate computation (2 QuaternionLinear calls instead of 8)
 - **3-Class Metrics:** Directional accuracy and Sharpe ratio with configurable flat zone threshold based on training return standard deviation
 - **Multi-Frequency Support:** Daily (year-based split), hourly and 4-hourly (ratio-based split) data configurations
+- **Hierarchical Multi-Feature Support:** 16 LunarCrush features (price, market, social, sentiment) grouped into 4 semantic quaternions with 3 fusion strategies (concat, group attention, meta-quaternion)
 
 ---
 

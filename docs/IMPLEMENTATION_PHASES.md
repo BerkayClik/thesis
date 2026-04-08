@@ -54,3 +54,15 @@
 - Real vs Quaternion
 - With vs Without Attention
 - Daily vs Hourly
+
+---
+
+## Phase 8 – Hierarchical Extension
+- Extend from 4 OHLC features to 16 LunarCrush features (price, market, social, sentiment)
+- Group 16 features into 4 semantic quaternions (4 features each)
+- Implement 4 independent QLSTMs (one per group) with configurable fusion
+- Implement 3 fusion strategies: Concat, Group Attention, Meta-Quaternion
+- Add optional per-group temporal attention
+- Integrate 6 hierarchical variants into experiment runner
+- Create data configs for hourly and 4-hourly hierarchical experiments
+- Create Colab notebooks for reproducible execution

@@ -15,11 +15,12 @@ A technical guide for CS students explaining the neural network architectures in
 7. [Model 2: Real LSTM + Attention](#model-2-real-lstm--attention)
 8. [Model 3: Quaternion LSTM](#model-3-quaternion-lstm)
 9. [Model 4: Quaternion LSTM + Attention](#model-4-quaternion-lstm--attention)
-10. [Comparison Summary](#comparison-summary)
-    - [4 Model Architectures](#4-model-architectures)
-    - [7 Experimental Variants](#7-experimental-variants)
+10. [Model 5: Hierarchical Quaternion LSTM](#model-5-hierarchical-quaternion-lstm)
+11. [Comparison Summary](#comparison-summary)
+    - [5 Model Architectures](#5-model-architectures)
+    - [13 Experimental Variants](#13-experimental-variants)
     - [Parameter Count Comparison](#parameter-count-comparison)
-11. [Data Flow Diagram](#data-flow-diagram-complete)
+12. [Data Flow Diagram](#data-flow-diagram-complete)
 12. [Training, Validation, and Testing](#training-validation-and-testing)
     - [Data Splitting Strategy](#data-splitting-strategy)
     - [Preprocessing Pipeline Order](#preprocessing-pipeline-order)
@@ -757,22 +758,275 @@ class QNNAttentionModel(QuaternionLSTMBase):
 
 ---
 
+## Model 5: Hierarchical Quaternion LSTM
+
+**File:** `src/models/hierarchical_qlstm.py`
+
+### Motivation
+
+Models 3 and 4 encode 4 OHLC values as a single quaternion. This works because OHLC is a natural 4-tuple with strong internal structure. The LunarCrush dataset provides 16 features (after dropping 2 of 18), and treating all 16 as a flat vector loses the semantic grouping that makes quaternion encoding meaningful.
+
+The 16 features fall into 4 natural groups of 4:
+
+| Group | Features |
+|-------|---------|
+| Price | open, high, low, close |
+| Market | volume, market_cap, dominance, circulating_supply |
+| Social | contributors_active, contributors_created, posts_active, posts_created |
+| Sentiment | sentiment, galaxy_score, social_dominance, interactions |
+
+Each group of 4 maps cleanly to a quaternion. Four independent QLSTMs process the groups in parallel, then a fusion layer combines the group representations. This preserves the quaternion encoding principle while scaling to richer feature sets.
+
+### Architecture
+
+```
+Input: (batch, seq, 16) — 16 LunarCrush features
+         │
+         ▼
+    ┌─────────┐
+    │  RevIN  │  Instance normalization over all 16 features
+    │  (norm) │
+    └────┬────┘
+         │ (batch, seq, 16)
+         │
+         ▼ Split into 4 groups of 4
+    ┌────────────────────────────────────────────────────┐
+    │  group_0       group_1       group_2       group_3  │
+    │  Price         Market        Social        Sentiment│
+    │  (b,seq,4)     (b,seq,4)     (b,seq,4)     (b,seq,4)│
+    └────┬───────────────┬──────────────┬──────────────┬──┘
+         │               │              │              │
+         ▼               ▼              ▼              ▼
+    unsqueeze(2)  unsqueeze(2)   unsqueeze(2)  unsqueeze(2)
+    (b,seq,1,4)   (b,seq,1,4)   (b,seq,1,4)   (b,seq,1,4)
+         │               │              │              │
+         ▼               ▼              ▼              ▼
+    ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐
+    │ QLSTM_0 │   │ QLSTM_1 │   │ QLSTM_2 │   │ QLSTM_3 │
+    │input=1  │   │input=1  │   │input=1  │   │input=1  │
+    └────┬────┘   └────┬────┘   └────┬────┘   └────┬────┘
+         │               │              │              │
+         ▼               ▼              ▼              ▼
+    (b,seq,H,4)   (b,seq,H,4)   (b,seq,H,4)   (b,seq,H,4)
+         │               │              │              │
+         ▼ flatten        ▼ flatten       ▼ flatten      ▼ flatten
+    (b,seq,H*4)   (b,seq,H*4)   (b,seq,H*4)   (b,seq,H*4)
+         │               │              │              │
+         ▼ project        ▼ project      ▼ project     ▼ project
+    (b,seq,H)     (b,seq,H)     (b,seq,H)     (b,seq,H)
+         │               │              │              │
+         ▼               ▼              ▼              ▼
+    [Optional per-group TemporalAttention — or take last timestep]
+         │               │              │              │
+         ▼               ▼              ▼              ▼
+    (b, H)        (b, H)        (b, H)        (b, H)
+         │               │              │              │
+         └───────────────┴──────────────┴──────────────┘
+                                 │
+                                 ▼
+                        ┌─────────────────┐
+                        │  Fusion Module  │  (3 strategies — see below)
+                        └────────┬────────┘
+                                 │ (b, H)
+                                 ▼
+                        ┌─────────────────┐
+                        │  Linear Head    │  H → 1
+                        └────────┬────────┘
+                                 │
+                                 ▼
+                        ┌─────────────────┐
+                        │  RevIN denorm   │  scalar denormalization
+                        └────────┬────────┘
+                                 │
+                                 ▼
+                    Output: (batch, 1) — original scale
+```
+
+### Shape Flow
+
+```
+Stage                           Shape
+─────────────────────────────────────────────────────
+Raw input                       (batch, seq, 16)
+After RevIN norm                (batch, seq, 16)
+Per-group slice                 (batch, seq, 4)   × 4
+After unsqueeze                 (batch, seq, 1, 4) × 4
+After QLSTM                     (batch, seq, H, 4) × 4
+After flatten                   (batch, seq, H*4)  × 4
+After projection                (batch, seq, H)    × 4
+After aggregation               (batch, H)         × 4
+After fusion                    (batch, H)
+After output head               (batch, 1)
+After RevIN denorm              (batch, 1)
+```
+
+Where `H` is `hidden_size` (default 32 for parameter-matched variants).
+
+### Fusion Strategies
+
+Three fusion strategies are available via the `fusion_type` parameter.
+
+#### ConcatFusion
+
+Concatenates the 4 group vectors and projects back to `hidden_size`:
+
+```python
+class ConcatFusion(nn.Module):
+    def __init__(self, hidden_size, num_groups=4):
+        self.proj = nn.Linear(hidden_size * num_groups, hidden_size)
+
+    def forward(self, group_vectors):
+        # group_vectors: list of (batch, hidden) tensors
+        x = torch.cat(group_vectors, dim=-1)  # (batch, hidden*4)
+        return self.proj(x)                   # (batch, hidden)
+```
+
+Simple and effective. The linear layer learns which group features to combine and how.
+
+#### GroupAttentionFusion
+
+Learns a scalar attention weight per group, making the fusion interpretable:
+
+```python
+class GroupAttentionFusion(nn.Module):
+    def __init__(self, hidden_size, num_groups=4):
+        self.attn = nn.Linear(hidden_size, 1)
+
+    def forward(self, group_vectors):
+        # group_vectors: list of (batch, hidden) tensors
+        stacked = torch.stack(group_vectors, dim=1)  # (batch, 4, hidden)
+        scores = self.attn(stacked).squeeze(-1)       # (batch, 4)
+        weights = torch.softmax(scores, dim=-1)       # (batch, 4)
+        # Weighted sum over groups
+        out = (weights.unsqueeze(-1) * stacked).sum(dim=1)  # (batch, hidden)
+        return out
+```
+
+The attention weights reveal which semantic group (Price, Market, Social, Sentiment) the model relies on most for a given prediction.
+
+#### MetaQuaternionFusion
+
+Treats the 4 group vectors as the 4 components of a meta-quaternion and fuses them via a `QuaternionLinear` layer:
+
+```python
+class MetaQuaternionFusion(nn.Module):
+    def __init__(self, hidden_size):
+        self.qlinear = QuaternionLinear(hidden_size, hidden_size)
+        self.proj = nn.Linear(hidden_size * 4, hidden_size)
+
+    def forward(self, group_vectors):
+        # group_vectors: list of (batch, hidden) tensors
+        # Stack as quaternion: (batch, hidden, 4)
+        q = torch.stack(group_vectors, dim=-1)  # (batch, hidden, 4)
+        fused = self.qlinear(q)                 # (batch, hidden, 4)
+        out = self.proj(fused.flatten(1))       # (batch, hidden)
+        return out
+```
+
+This applies the Hamilton product across the group dimension, so cross-group interactions (e.g., how Price relates to Sentiment) are captured through quaternion algebra rather than a plain linear layer.
+
+### Key Code
+
+```python
+class HierarchicalQLSTM(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int = 32,
+        num_layers: int = 2,
+        dropout: float = 0.2,
+        num_features: int = 16,
+        num_groups: int = 4,
+        fusion_type: str = 'concat',       # 'concat' | 'group_attention' | 'meta_quaternion'
+        use_temporal_attention: bool = False,
+        target_col: int = 3,               # Close price index within Price group
+    ):
+        self.revin = RevIN(num_features)
+        # One independent QLSTM per group
+        self.group_qlstms = nn.ModuleList([
+            QuaternionLSTM(input_size=1, hidden_size=hidden_size,
+                           num_layers=num_layers, dropout=dropout)
+            for _ in range(num_groups)
+        ])
+        # Flatten quaternion output → real space
+        self.group_projections = nn.ModuleList([
+            nn.Linear(hidden_size * 4, hidden_size)
+            for _ in range(num_groups)
+        ])
+        # Optional per-group temporal attention
+        if use_temporal_attention:
+            self.group_attentions = nn.ModuleList([
+                TemporalAttention(hidden_size) for _ in range(num_groups)
+            ])
+        # Fusion
+        self.fusion = build_fusion(fusion_type, hidden_size, num_groups)
+        self.output_head = nn.Linear(hidden_size, 1)
+
+    def forward(self, x):
+        x = self.revin(x, 'norm')                    # (batch, seq, 16)
+        groups = x.chunk(4, dim=-1)                  # 4 × (batch, seq, 4)
+
+        group_vecs = []
+        for g_idx, g_feat in enumerate(groups):
+            q_in = g_feat.unsqueeze(2)               # (batch, seq, 1, 4)
+            out, _ = self.group_qlstms[g_idx](q_in)  # (batch, seq, H, 4)
+            flat = out.flatten(2)                    # (batch, seq, H*4)
+            proj = self.group_projections[g_idx](flat)  # (batch, seq, H)
+
+            if self.use_temporal_attention:
+                vec = self.group_attentions[g_idx](proj)  # (batch, H)
+            else:
+                vec = proj[:, -1, :]                 # (batch, H) last timestep
+
+            group_vecs.append(vec)
+
+        fused = self.fusion(group_vecs)              # (batch, H)
+        output = self.output_head(fused)             # (batch, 1)
+        output = self.revin.denorm_scalar(output, self.target_col)
+        return output
+```
+
+### Experimental Variants
+
+Six variants are added to the experiment suite (all at `hidden_size=32`):
+
+| Variant Name | Fusion | Temporal Attention |
+|---|---|---|
+| `hier_qlstm_concat` | ConcatFusion | No |
+| `hier_qlstm_concat_attn` | ConcatFusion | Yes |
+| `hier_qlstm_group_attn` | GroupAttentionFusion | No |
+| `hier_qlstm_group_attn_temporal` | GroupAttentionFusion | Yes |
+| `hier_qlstm_meta_quat` | MetaQuaternionFusion | No |
+| `hier_qlstm_meta_quat_attn` | MetaQuaternionFusion | Yes |
+
+### Design Decisions
+
+**Why `input_size=1` per group?** Each group is a 4-component quaternion, so it maps to a single quaternion feature — the same encoding used in Models 3 and 4 for OHLC. This keeps the quaternion semantics consistent.
+
+**Why independent QLSTMs?** Sharing weights across groups would force the model to treat Price and Sentiment dynamics identically. Independent QLSTMs let each group learn its own temporal patterns.
+
+**Why RevIN over all 16 features?** Normalizing all features together preserves relative scale relationships within each group (e.g., open and close are on the same scale). Per-group normalization would destroy this.
+
+**Target column:** The output is the next-day Close price. Within the Price group (group 0), Close is at index 3 — the same `target_col=3` convention used in Models 3 and 4.
+
+---
+
 ## Comparison Summary
 
-### 4 Model Architectures
+### 5 Model Architectures
 
-| Model | OHLC Encoding | Sequence Processing | Time Aggregation | Normalization |
-|-------|---------------|---------------------|------------------|---------------|
+| Model | Input Encoding | Sequence Processing | Time Aggregation | Normalization |
+|-------|----------------|---------------------|------------------|---------------|
 | Real LSTM | Independent features | Standard LSTM | Last timestep | Z-score (external) |
 | Real LSTM + Attention | Independent features | Standard LSTM | Learned weights | Z-score (external) |
-| Quaternion LSTM | Single quaternion | Hamilton product LSTM | Last timestep | RevIN (internal) |
-| **Quaternion LSTM + Attention** | Single quaternion | Hamilton product LSTM | Learned weights | RevIN (internal) |
+| Quaternion LSTM | Single quaternion (OHLC) | Hamilton product LSTM | Last timestep | RevIN (internal) |
+| Quaternion LSTM + Attention | Single quaternion (OHLC) | Hamilton product LSTM | Learned weights | RevIN (internal) |
+| **Hierarchical Quaternion LSTM** | 4 quaternions (16 features) | 4 independent QLSTMs | Per-group + fusion | RevIN (internal) |
 
-Real LSTM models use Z-score normalization (training-set statistics applied externally). Quaternion models use RevIN for per-instance normalization and denormalization internally.
+Real LSTM models use Z-score normalization (training-set statistics applied externally). Quaternion and Hierarchical QLSTM models use RevIN for per-instance normalization and denormalization internally.
 
-### 7 Experimental Variants
+### 13 Experimental Variants
 
-We run **7 variants** in experiments. This includes a naive baseline plus 6 model variants. Quaternion models have ~3-4x more parameters at the same hidden size, so we test them in two configurations for fair comparison:
+We run **13 variants** in experiments. This includes a naive baseline, 6 OHLC-based variants, and 6 hierarchical variants. Quaternion models have ~3-4x more parameters at the same hidden size, so we test them in two configurations for fair comparison:
 
 | # | Variant Name | Architecture | Hidden | Purpose |
 |---|--------------|--------------|--------|---------|
@@ -783,12 +1037,20 @@ We run **7 variants** in experiments. This includes a naive baseline plus 6 mode
 | 4 | `quaternion_lstm_attention_param_matched` | Quaternion LSTM + Attention | 32 | Parameter-matched |
 | 5 | `quaternion_lstm` | Quaternion LSTM | 64 | Layer-matched |
 | 6 | `quaternion_lstm_attention` | Quaternion LSTM + Attention | 64 | Layer-matched |
+| 7 | `hier_qlstm_concat` | Hierarchical QLSTM | 32 | Concat fusion baseline |
+| 8 | `hier_qlstm_concat_attn` | Hierarchical QLSTM + Attention | 32 | Concat + temporal attention |
+| 9 | `hier_qlstm_group_attn` | Hierarchical QLSTM | 32 | Group attention fusion |
+| 10 | `hier_qlstm_group_attn_temporal` | Hierarchical QLSTM + Attention | 32 | Group attention + temporal |
+| 11 | `hier_qlstm_meta_quat` | Hierarchical QLSTM | 32 | Meta-quaternion fusion |
+| 12 | `hier_qlstm_meta_quat_attn` | Hierarchical QLSTM + Attention | 32 | Meta-quaternion + temporal |
 
 **Naive baseline:** A persistence model that predicts the last observed close price as the next value (random walk hypothesis). Establishes that models are learning something meaningful beyond simple persistence.
 
 **Parameter-matched (hidden=32):** Reduced hidden size so parameter count approximately matches real LSTM (~51K). Tests if improvements come from quaternion math or just having more parameters. **This is the primary comparison.**
 
 **Layer-matched (hidden=64):** Same architecture depth as real LSTM, but quaternion has more parameters. Tests if quaternion math itself helps. Included for completeness.
+
+**Hierarchical variants (hidden=32):** All 6 hierarchical variants use `hidden_size=32` for parameter-matched comparison. They operate on 16 LunarCrush features rather than 4 OHLC features.
 
 ### Parameter Count Comparison
 
@@ -813,7 +1075,20 @@ We run **7 variants** in experiments. This includes a naive baseline plus 6 mode
 | Quaternion LSTM | ~174K |
 | Quaternion LSTM + Attention | ~179K |
 
-Quaternion models have more parameters because each weight is 4D instead of 1D.
+**Hierarchical QLSTM variants (hidden_size=32, 2 layers):**
+
+| Model | Fusion | Temporal Attention | Approximate Parameters |
+|-------|--------|--------------------|----------------------|
+| `hier_qlstm_concat` | ConcatFusion | No | ~227K |
+| `hier_qlstm_concat_attn` | ConcatFusion | Yes | ~227K |
+| `hier_qlstm_group_attn` | GroupAttentionFusion | No | ~223K |
+| `hier_qlstm_group_attn_temporal` | GroupAttentionFusion | Yes | ~223K |
+| `hier_qlstm_meta_quat` | MetaQuaternionFusion | No | ~232K |
+| `hier_qlstm_meta_quat_attn` | MetaQuaternionFusion | Yes | ~232K |
+
+Attention variants add ~132 parameters per group (4 groups × 1 linear layer of size hidden). The dominant cost is the 4 independent QLSTMs, each equivalent to a full quaternion LSTM backbone.
+
+Quaternion models have more parameters than real-valued models because each weight is 4D instead of 1D.
 
 ---
 
@@ -841,6 +1116,8 @@ The research question: **Does quaternion encoding help predict stock prices?**
 ---
 
 ## Data Flow Diagram (Complete)
+
+> **Note:** This diagram covers the original 4-feature (OHLC) path used by Models 1-4. Hierarchical QLSTM (Model 5) follows a different path: 16 LunarCrush features enter RevIN, are split into 4 groups of 4, processed by 4 independent QLSTMs, and combined by a fusion module before the output head. That path is described in full in the [Model 5 section](#model-5-hierarchical-quaternion-lstm).
 
 ```
 Raw OHLC Data (e.g., BTC-USD from Yahoo Finance)
