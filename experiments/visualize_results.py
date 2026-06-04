@@ -104,7 +104,7 @@ def plot_training_curves(results: Dict, output_dir: str, figsize=(14, 10)):
     n_rows = (n_models + n_cols - 1) // n_cols
 
     fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
-    axes = axes.flatten() if n_models > 1 else [axes]
+    axes = np.atleast_1d(axes).flatten()
 
     for idx, model_name in enumerate(models):
         ax = axes[idx]
@@ -300,7 +300,7 @@ def plot_predictions_all_models(results: Dict, output_dir: str,
     n_rows = (n_models + n_cols - 1) // n_cols
 
     fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize)
-    axes = axes.flatten() if n_models > 1 else [axes]
+    axes = np.atleast_1d(axes).flatten()
 
     for idx, model_name in enumerate(models_with_preds):
         ax = axes[idx]

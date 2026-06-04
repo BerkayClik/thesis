@@ -66,12 +66,14 @@ def _stats_dict(pf):
         if isinstance(v, (np.integer,)):
             out[k] = int(v)
         elif isinstance(v, (np.floating,)):
-            out[k] = float(v)
+            fv = float(v)
+            out[k] = fv if np.isfinite(fv) else None
         elif isinstance(v, (pd.Timestamp, pd.Timedelta)):
             out[k] = str(v)
         else:
             try:
-                out[k] = float(v)
+                fv = float(v)
+                out[k] = fv if np.isfinite(fv) else None
             except (TypeError, ValueError):
                 out[k] = str(v)
     return out
