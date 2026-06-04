@@ -28,11 +28,11 @@ from src.data.dataset import SP500Dataset
 from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel, HierarchicalQLSTM
 from src.models.qnn_attention_model import QuaternionLSTMNoAttention
 from src.training.trainer import Trainer
-from src.training.losses import mse_loss
+from src.training.losses import mse_loss, directional_mse_loss
 from src.evaluation.metrics import compute_mape
 from src.evaluation.directional_accuracy import compute_directional_accuracy, compute_directional_accuracy_3class
 from src.evaluation.sharpe_ratio import compute_sharpe_ratio, compute_sharpe_ratio_3class
-from src.utils.config import resolve_target_mode
+from src.utils.config import resolve_target_mode, resolve_loss
 from src.evaluation.predictions_io import write_predictions_csv
 
 
@@ -508,10 +508,19 @@ def run_single_experiment(
         max_grad_norm = training_config.get('max_grad_norm', 1.0)
         scheduler_config = training_config.get('scheduler', None)
 
+        loss_type, lambda_dir, dir_k = resolve_loss(config)
+        if loss_type == "directional_mse":
+            def loss_fn(p, t):
+                return directional_mse_loss(p, t, lambda_dir=lambda_dir, k=dir_k)
+            if verbose:
+                print(f"  Loss: directional_mse (lambda_dir={lambda_dir}, k={dir_k})")
+        else:
+            loss_fn = mse_loss
+
         trainer = Trainer(
             model=model,
             optimizer=optimizer,
-            loss_fn=mse_loss,
+            loss_fn=loss_fn,
             device=device,
             checkpoint_dir=checkpoint_dir,
             max_grad_norm=max_grad_norm,

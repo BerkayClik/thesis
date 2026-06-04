@@ -10,6 +10,47 @@ from typing import Dict, Any
 
 
 VALID_TARGET_MODES = ("price", "return", "log_return")
+VALID_LOSS_TYPES = ("mse", "directional_mse")
+# Conservative default: a local lambda sweep on BTC 4h showed corr(pred,true)
+# DEGRADES as lambda rises (0.04 -> 0.00), so keep the nudge gentle when a user
+# opts into directional loss without specifying lambda_dir.
+DEFAULT_LAMBDA_DIR = 0.1
+DEFAULT_DIRECTIONAL_K = 1000.0
+
+
+def resolve_loss(config: Dict[str, Any]):
+    """Resolve the training loss selection from a config dict.
+
+    Returns ``(loss_type, lambda_dir, k)``. Default is ``"mse"`` with
+    ``lambda_dir=0.0`` so existing configs/runs are unchanged.
+
+    ``directional_mse`` is only valid in return-mode: the sign of a return is a
+    direction, but the sign of a price is meaningless, so requesting it in
+    price-mode is an error.
+
+    Raises:
+        ValueError: unknown loss_type, or directional_mse in price-mode.
+    """
+    training = config.get("training") or {}
+    loss_type = training.get("loss_type", "mse")
+
+    if loss_type not in VALID_LOSS_TYPES:
+        raise ValueError(
+            f"Invalid loss_type {loss_type!r}; expected one of {VALID_LOSS_TYPES}"
+        )
+
+    if loss_type == "mse":
+        return "mse", 0.0, DEFAULT_DIRECTIONAL_K
+
+    if resolve_target_mode(config) == "price":
+        raise ValueError(
+            "directional_mse loss requires target_mode 'return' or 'log_return' "
+            "(sign of a price is not a direction)"
+        )
+
+    lambda_dir = float(training.get("lambda_dir", DEFAULT_LAMBDA_DIR))
+    k = float(training.get("directional_k", DEFAULT_DIRECTIONAL_K))
+    return "directional_mse", lambda_dir, k
 
 
 def resolve_target_mode(config: Dict[str, Any]) -> str:
