@@ -1,0 +1,54 @@
+experiment:
+  name: daily_hierarchical_3seed
+  description: Hierarchical QLSTM variants on daily data
+  seeds:
+  - 42
+  - 123
+  - 2024
+  variants:
+  - name: hier_qlstm_concat
+    model:
+      type: hier_qlstm_concat
+      hidden_size: 32
+      num_layers: 2
+      dropout: 0.1
+    learning_rate: 0.0005
+  - name: hier_qlstm_concat_attn
+    model:
+      type: hier_qlstm_concat_attn
+      hidden_size: 32
+      num_layers: 2
+      dropout: 0.1
+    learning_rate: 0.0005
+  - name: hier_qlstm_group_attn
+    model:
+      type: hier_qlstm_group_attn
+      hidden_size: 32
+      num_layers: 2
+      dropout: 0.1
+    learning_rate: 0.0005
+  - name: hier_qlstm_group_attn_temporal
+    model:
+      type: hier_qlstm_group_attn_temporal
+      hidden_size: 32
+      num_layers: 2
+      dropout: 0.1
+    learning_rate: 0.0005
+  - name: hier_qlstm_meta_quat
+    model:
+      type: hier_qlstm_meta_quat
+      hidden_size: 32
+      num_layers: 2
+      dropout: 0.1
+    learning_rate: 0.0005
+  - name: hier_qlstm_meta_quat_attn
+    model:
+      type: hier_qlstm_meta_quat_attn
+      hidden_size: 32
+      num_layers: 2
+      dropout: 0.1
+    learning_rate: 0.0005
+output:
+  results_dir: experiments/results
+  save_predictions: true
+  save_attention_weights: true
