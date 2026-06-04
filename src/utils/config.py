@@ -9,6 +9,37 @@ import os
 from typing import Dict, Any
 
 
+VALID_TARGET_MODES = ("price", "return", "log_return")
+
+
+def resolve_target_mode(config: Dict[str, Any]) -> str:
+    """Resolve the prediction target mode from a config dict.
+
+    The flag is additive and non-destructive: when absent it defaults to
+    ``"price"`` so every existing config keeps its current behavior.
+
+    Lookup order: ``config["data"]["target_mode"]`` then top-level
+    ``config["target_mode"]``.
+
+    Args:
+        config: Loaded configuration dictionary.
+
+    Returns:
+        One of ``"price"``, ``"return"``, ``"log_return"``.
+
+    Raises:
+        ValueError: If an unknown target_mode value is provided.
+    """
+    data = config.get("data") or {}
+    mode = data.get("target_mode", config.get("target_mode", "price"))
+
+    if mode not in VALID_TARGET_MODES:
+        raise ValueError(
+            f"Invalid target_mode {mode!r}; expected one of {VALID_TARGET_MODES}"
+        )
+    return mode
+
+
 def load_config(config_path: str) -> Dict[str, Any]:
     """
     Load configuration from YAML file.

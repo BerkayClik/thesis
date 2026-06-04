@@ -295,6 +295,23 @@ python experiments/run_experiments.py \
 
 **Config structure:** The `--base-config` provides data source, window size, split boundaries, training hyperparameters, and evaluation settings. The `--experiment-config` defines which model variants to run and with which seeds.
 
+### Returns-Mode Training & Portfolio Backtesting
+
+Two additive capabilities (the default price workflow above is unchanged):
+
+- **Train on returns** — set `target_mode: return` (or `log_return`) under `data:` in any base config. The model predicts a return; prices are reconstructed for the existing metrics. Default is `price`.
+- **Portfolio backtest** — feed model predictions into a leakage-free, fee-aware vectorbt portfolio (next-bar-open execution) and measure real performance (total return, Sharpe, Sortino, max drawdown, equity curve), single-coin or as a pooled multi-coin basket.
+
+The backtester runs in an **isolated env** (vectorbt needs `numpy<2`, incompatible with the main env):
+
+```bash
+uv venv --python 3.11 .venv-backtest
+uv pip install --python .venv-backtest -r requirements-backtest.txt
+.venv-backtest/bin/python scripts/backtest_env_smoke.py   # verify
+```
+
+See **[BACKTESTING.md](docs/BACKTESTING.md)** for the full workflow (alignment gate, single-coin, basket, plots).
+
 ---
 
 ## The Hamilton Product
@@ -365,6 +382,7 @@ quaternion_lstm_param_matched       directional_accuracy     X.XXXX       X.XXX 
 | [LITERATURE_SCOPE.md](docs/LITERATURE_SCOPE.md) | Research background & references |
 | [IMPLEMENTATION_PHASES.md](docs/IMPLEMENTATION_PHASES.md) | Development phases & milestones |
 | [REPO_STRUCTURE.md](docs/REPO_STRUCTURE.md) | Repository structure reference |
+| [BACKTESTING.md](docs/BACKTESTING.md) | Returns-mode training & vectorbt portfolio backtesting |
 
 ---
 

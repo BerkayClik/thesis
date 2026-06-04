@@ -152,6 +152,7 @@ class HierarchicalQLSTM(nn.Module):
         use_temporal_attention: bool = False,
         num_groups: int = 4,
         features_per_group: int = 4,
+        target_mode: str = "price",
     ):
         super().__init__()
         if num_features != num_groups * features_per_group:
@@ -168,6 +169,7 @@ class HierarchicalQLSTM(nn.Module):
         self.target_col = target_col
         self.use_temporal_attention = use_temporal_attention
         self.fusion_type = fusion_type
+        self.target_mode = target_mode
 
         # --- normalisation ---
         if norm_type == "dish_ts":
@@ -274,7 +276,9 @@ class HierarchicalQLSTM(nn.Module):
             weights = None
 
         output = self.output_head(fused)
-        output = self.norm_layer.denorm_scalar(output, self.target_col)
+        # Oracle O3: price-mode only; return-mode output stays in return scale.
+        if self.target_mode == "price":
+            output = self.norm_layer.denorm_scalar(output, self.target_col)
 
         if weights is not None:
             return output, weights

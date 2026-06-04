@@ -65,6 +65,7 @@ ipython_config.py
 # Environments
 .env
 .venv
+.venv-backtest/
 env/
 venv/
 ENV/

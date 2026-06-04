@@ -1,0 +1,22 @@
+# Isolated backtesting environment (DO NOT install into the main thesis env).
+#
+# WHY ISOLATED: vectorbt depends on numba, which requires numpy < 2 and
+# pandas < 3. The main `thesis` env runs numpy 2.x / pandas 2.3.x / torch 2.9.x
+# for model training, which is INCOMPATIBLE with vectorbt. Keep them separate.
+#
+# SETUP (uv + Python 3.11):
+#   uv venv --python 3.11 .venv-backtest
+#   uv pip install --python .venv-backtest -r requirements-backtest.txt
+#
+# SMOKE TEST:
+#   .venv-backtest/bin/python scripts/backtest_env_smoke.py
+#
+# This env is consumed ONLY by the src/backtesting/ module and scripts that
+# run the vectorbt portfolio backtest on saved model predictions. Model
+# training and the rest of the pipeline stay on the 3.13 thesis env.
+
+vectorbt==0.27.3
+numpy<2
+pandas<3
+numba>=0.59
+matplotlib>=3.7

@@ -50,12 +50,14 @@ class QuaternionLSTMBase(nn.Module):
         norm_type: str = "revin",
         seq_len: int = 20,
         dish_init: str = "standard",
+        target_mode: str = "price",
     ):
         super().__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.input_size = input_size
         self.target_col = target_col
+        self.target_mode = target_mode
 
         # Normalization layer (swappable)
         if norm_type == "dish_ts":
@@ -127,10 +129,11 @@ class QNNAttentionModel(QuaternionLSTMBase):
         norm_type: str = "revin",
         seq_len: int = 20,
         dish_init: str = "standard",
+        target_mode: str = "price",
     ):
         super().__init__(
             hidden_size, num_layers, dropout, input_size, num_features,
-            target_col, norm_type, seq_len, dish_init,
+            target_col, norm_type, seq_len, dish_init, target_mode,
         )
         self.attention = TemporalAttention(hidden_size)
 
@@ -172,8 +175,10 @@ class QNNAttentionModel(QuaternionLSTMBase):
         # Regression head
         output = self.output_head(context)
 
-        # Reverse normalization to original scale
-        output = self.norm_layer.denorm_scalar(output, self.target_col)
+        # Oracle O3: only denorm to price scale in price-mode; return-mode
+        # outputs are already in return scale and MUST NOT use price stats.
+        if self.target_mode == "price":
+            output = self.norm_layer.denorm_scalar(output, self.target_col)
 
         if return_attention:
             return output, attention_weights
@@ -209,10 +214,11 @@ class QuaternionLSTMNoAttention(QuaternionLSTMBase):
         norm_type: str = "revin",
         seq_len: int = 20,
         dish_init: str = "standard",
+        target_mode: str = "price",
     ):
         super().__init__(
             hidden_size, num_layers, dropout, input_size, num_features,
-            target_col, norm_type, seq_len, dish_init,
+            target_col, norm_type, seq_len, dish_init, target_mode,
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -242,7 +248,8 @@ class QuaternionLSTMNoAttention(QuaternionLSTMBase):
         projected = self.projection(last_hidden_flat)
         output = self.output_head(projected)
 
-        # Reverse normalization to original scale
-        output = self.norm_layer.denorm_scalar(output, self.target_col)
+        # Oracle O3: price-mode only; return-mode output stays in return scale.
+        if self.target_mode == "price":
+            output = self.norm_layer.denorm_scalar(output, self.target_col)
 
         return output

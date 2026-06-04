@@ -32,6 +32,8 @@ from src.training.losses import mse_loss
 from src.evaluation.metrics import compute_mape
 from src.evaluation.directional_accuracy import compute_directional_accuracy, compute_directional_accuracy_3class
 from src.evaluation.sharpe_ratio import compute_sharpe_ratio, compute_sharpe_ratio_3class
+from src.utils.config import resolve_target_mode
+from src.evaluation.predictions_io import write_predictions_csv
 
 
 def load_config(config_path: str) -> Dict:
@@ -114,13 +116,17 @@ def get_device(config: Dict) -> torch.device:
 class NaiveBaseline(torch.nn.Module):
     """Naive baseline - predicts last observed target value (persistence)."""
 
-    def __init__(self, target_col: int = 3):
+    def __init__(self, target_col: int = 3, target_mode: str = "price"):
         super().__init__()
         self.target_col = target_col
+        self.target_mode = target_mode
         # Dummy parameter so optimizer doesn't complain
         self.dummy = torch.nn.Parameter(torch.zeros(1), requires_grad=False)
 
     def forward(self, x):
+        if self.target_mode != "price":
+            # Persistence in return space is a zero return -> pred_price = prev_close.
+            return torch.zeros(x.shape[0], 1, device=x.device, dtype=x.dtype)
         # Return the last target value in the window (persistence model)
         return x[:, -1, self.target_col:self.target_col + 1]  # Shape (batch, 1)
 
@@ -136,6 +142,7 @@ def create_model(
     norm_type: str = "revin",
     seq_len: int = 20,
     dish_init: str = "standard",
+    target_mode: str = "price",
 ):
     """Create model based on type string.
 
@@ -154,7 +161,7 @@ def create_model(
             or ``'uniform'``.
     """
     if model_type == "naive_zero":
-        return NaiveBaseline(target_col=target_col)
+        return NaiveBaseline(target_col=target_col, target_mode=target_mode)
     elif model_type == "real_lstm":
         return RealLSTM(
             input_size=input_size,
@@ -179,6 +186,7 @@ def create_model(
             norm_type=norm_type,
             seq_len=seq_len,
             dish_init=dish_init,
+            target_mode=target_mode,
         )
     elif model_type == "quaternion_lstm_attention":
         return QNNAttentionModel(
@@ -190,6 +198,7 @@ def create_model(
             norm_type=norm_type,
             seq_len=seq_len,
             dish_init=dish_init,
+            target_mode=target_mode,
         )
     elif model_type.startswith("hier_qlstm_"):
         suffix = model_type[len("hier_qlstm_"):]
@@ -218,6 +227,7 @@ def create_model(
             dish_init=dish_init,
             fusion_type=fusion,
             use_temporal_attention=use_attn,
+            target_mode=target_mode,
         )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
@@ -303,7 +313,9 @@ def evaluate_model(
     norm_stats: Dict,
     flat_threshold_fraction: float = 0.5,
     needs_denorm: bool = False,
-    target_col: int = 3
+    target_col: int = 3,
+    target_mode: str = "price",
+    prev_closes=None,
 ) -> Dict:
     """
     Evaluate model on a dataset.
@@ -350,12 +362,24 @@ def evaluate_model(
     targets = torch.cat(all_targets)
     prevs = torch.cat(all_prevs)
 
-    if needs_denorm:
+    if target_mode != "price":
+        # Oracle Design B: preds/targets are RETURNS. Reconstruct prices from the
+        # RAW prev_close (never the z-scored window value), and NEVER denormalize a
+        # return with price stats. prev_closes is the raw decision-bar close array.
+        prev_raw = torch.as_tensor(prev_closes, dtype=preds.dtype)[: len(preds)]
+        if target_mode == "log_return":
+            preds = prev_raw * torch.exp(preds)
+            targets = prev_raw * torch.exp(targets)
+        else:
+            preds = prev_raw * (1.0 + preds)
+            targets = prev_raw * (1.0 + targets)
+        prevs = prev_raw
+    elif needs_denorm:
         # Real LSTM / naive: outputs are in normalized scale, denormalize to original prices
         preds = denormalize(preds, norm_stats, col=target_col)
         targets = denormalize(targets, norm_stats, col=target_col)
         prevs = denormalize(prevs, norm_stats, col=target_col)
-    # Quaternion models: outputs already in original price scale via RevIN
+    # Quaternion models (price-mode): outputs already in original price scale via RevIN
 
     # Compute flat threshold from training return std
     return_std = norm_stats.get('return_std', 0.0)
@@ -401,7 +425,12 @@ def run_single_experiment(
     flat_threshold_fraction: float = 0.5,
     needs_denorm: bool = False,
     target_col: int = 3,
-    feature_dim: int = 4
+    feature_dim: int = 4,
+    target_mode: str = "price",
+    test_prev_closes=None,
+    test_decision_times=None,
+    test_target_times=None,
+    predictions_dir=None,
 ) -> Dict:
     """
     Run a single experiment with one model configuration and seed.
@@ -423,6 +452,7 @@ def run_single_experiment(
         norm_type=model_config.get('norm_type', 'revin'),
         seq_len=window_size,
         dish_init=model_config.get('dish_init', 'standard'),
+        target_mode=target_mode,
     )
 
     # Compile model for faster execution (PyTorch 2.0+)
@@ -515,12 +545,33 @@ def run_single_experiment(
     test_metrics = evaluate_model(model, test_loader, device, norm_stats,
                                   flat_threshold_fraction=flat_threshold_fraction,
                                   needs_denorm=needs_denorm,
-                                  target_col=target_col)
+                                  target_col=target_col,
+                                  target_mode=target_mode,
+                                  prev_closes=test_prev_closes)
+
+    predictions_csv_path = None
+    if (predictions_dir is not None
+            and test_decision_times is not None
+            and test_target_times is not None):
+        os.makedirs(predictions_dir, exist_ok=True)
+        predictions_csv_path = os.path.join(
+            predictions_dir, f"{variant_name}_seed{seed}_predictions.csv"
+        )
+        write_predictions_csv(
+            predictions_csv_path,
+            decision_times=test_decision_times,
+            target_times=test_target_times,
+            prev_closes=test_metrics['prev_closes'],
+            pred_closes=test_metrics['predictions'],
+            true_closes=test_metrics['targets'],
+        )
 
     result = {
         'seed': seed,
         'history': history,
         'test_metrics': test_metrics,
+        'target_mode': target_mode,
+        'predictions_csv_path': predictions_csv_path,
         'best_epoch': history['best_epoch'],
         'final_train_loss': history['train_loss'][-1] if history['train_loss'] else None,
         'final_val_loss': history['val_loss'][-1] if history['val_loss'] else None,
@@ -674,16 +725,23 @@ def run_experiment(
 
     # Create datasets
     window_size = data_config['window_size']
+    target_mode = resolve_target_mode(config)
+
+    # In return-mode the input window may be z-scored (real path) while the
+    # target/prev_close must come from RAW closes (Oracle Design B), so the
+    # normalized datasets carry the raw split tensor as their target_source.
+
+    test_dates = processed['split_info'].get('test_dates')
 
     # Raw datasets (for quaternion models with internal RevIN)
-    train_dataset_raw = SP500Dataset(train_data, window_size=window_size, target_col=target_col)
-    val_dataset_raw = SP500Dataset(val_data, window_size=window_size, target_col=target_col)
-    test_dataset_raw = SP500Dataset(test_data, window_size=window_size, target_col=target_col)
+    train_dataset_raw = SP500Dataset(train_data, window_size=window_size, target_col=target_col, target_mode=target_mode)
+    val_dataset_raw = SP500Dataset(val_data, window_size=window_size, target_col=target_col, target_mode=target_mode)
+    test_dataset_raw = SP500Dataset(test_data, window_size=window_size, target_col=target_col, target_mode=target_mode, index=test_dates)
 
     # Normalized datasets (for real LSTM / naive models)
-    train_dataset_norm = SP500Dataset(train_norm, window_size=window_size, target_col=target_col)
-    val_dataset_norm = SP500Dataset(val_norm, window_size=window_size, target_col=target_col)
-    test_dataset_norm = SP500Dataset(test_norm, window_size=window_size, target_col=target_col)
+    train_dataset_norm = SP500Dataset(train_norm, window_size=window_size, target_col=target_col, target_mode=target_mode, raw_data=None if target_mode == "price" else train_data)
+    val_dataset_norm = SP500Dataset(val_norm, window_size=window_size, target_col=target_col, target_mode=target_mode, raw_data=None if target_mode == "price" else val_data)
+    test_dataset_norm = SP500Dataset(test_norm, window_size=window_size, target_col=target_col, target_mode=target_mode, raw_data=None if target_mode == "price" else test_data, index=test_dates)
 
     # Create data loaders for both paths
     batch_size = config['training']['batch_size']
@@ -725,10 +783,16 @@ def run_experiment(
             cur_train_loader = train_loader_raw
             cur_val_loader = val_loader_raw
             cur_test_loader = test_loader_raw
+            cur_test_prev_closes = test_dataset_raw.prev_closes
+            cur_decision_times = test_dataset_raw.decision_times
+            cur_target_times = test_dataset_raw.target_times
         else:
             cur_train_loader = train_loader_norm
             cur_val_loader = val_loader_norm
             cur_test_loader = test_loader_norm
+            cur_test_prev_closes = test_dataset_norm.prev_closes
+            cur_decision_times = test_dataset_norm.decision_times
+            cur_target_times = test_dataset_norm.target_times
 
         variant_results = []
         fast_mode = config.get('training', {}).get('fast_mode', False)
@@ -751,6 +815,11 @@ def run_experiment(
                 needs_denorm=needs_denorm,
                 target_col=target_col,
                 feature_dim=feature_dim,
+                target_mode=target_mode,
+                test_prev_closes=cur_test_prev_closes,
+                test_decision_times=cur_decision_times,
+                test_target_times=cur_target_times,
+                predictions_dir=output_dir,
             )
             variant_results.append(result)
 
