@@ -1,5 +1,6 @@
 from .real_lstm import RealLSTM
 from .real_lstm_attention import RealLSTMAttention
+from .real_lstm_revin import RealLSTMRevIN, RealLSTMAttentionRevIN
 from .attention import TemporalAttention
 from .quaternion_ops import hamilton_product, quaternion_conjugate, quaternion_norm, QuaternionLinear
 from .quaternion_lstm import QuaternionLSTMCell, QuaternionLSTM

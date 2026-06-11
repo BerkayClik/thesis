@@ -313,6 +313,29 @@ class RealLSTM(nn.Module):
 
 Only uses the **last** hidden state. Information from earlier days might be lost.
 
+### RevIN ablation variants (`real_lstm_revin`, `real_lstm_attention_revin`)
+
+**File:** `src/models/real_lstm_revin.py`
+
+The standard real LSTM baselines receive statically Z-scored inputs
+(training-set mean/std) and their outputs are denormalized externally. Because
+quaternion models use per-window RevIN instead, the real-vs-quaternion
+comparison confounds architecture with normalization: in price-mode, test
+prices far outside the training range are out-of-distribution for the
+Z-scored baseline by construction.
+
+`RealLSTMRevIN` and `RealLSTMAttentionRevIN` wrap the same backbones with the
+exact normalization protocol of the quaternion models: RevIN (or Dish-TS)
+normalizes each input window, and in price-mode `denorm_scalar` restores the
+window's own price scale (skipped in return-mode, Oracle O3). They take the
+**raw**-data loader path in `run_experiments.py` (`has_internal_norm` matches
+the `_revin` suffix) and need no external denormalization.
+
+Use `configs/experiments/daily_revin_ablation_3seed.yaml` /
+`4hourly_revin_ablation_3seed.yaml` to run the ablation: any remaining gap
+between `real_lstm_revin` and the param-matched quaternion models is then
+attributable to architecture, not normalization.
+
 ---
 
 ## Model 2: Real LSTM + Attention

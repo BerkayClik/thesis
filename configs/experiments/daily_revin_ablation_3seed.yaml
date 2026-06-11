@@ -1,0 +1,60 @@
+experiment:
+  name: daily_revin_ablation_3seed
+  description: >
+    Normalization ablation on daily data: real LSTM with per-window RevIN vs
+    static Z-score vs quaternion models. Separates the architecture effect
+    from the normalization effect — the standard real-vs-quaternion comparison
+    confounds the two because only quaternion models get RevIN.
+  seeds:
+  - 42
+  - 123
+  - 2024
+  variants:
+  - name: naive_zero
+    model:
+      type: naive_zero
+      hidden_size: 1
+      num_layers: 1
+      dropout: 0.0
+  - name: real_lstm
+    model:
+      type: real_lstm
+      hidden_size: 64
+      num_layers: 2
+      dropout: 0.1
+  - name: real_lstm_revin
+    model:
+      type: real_lstm_revin
+      hidden_size: 64
+      num_layers: 2
+      dropout: 0.1
+  - name: real_lstm_attention
+    model:
+      type: real_lstm_attention
+      hidden_size: 64
+      num_layers: 2
+      dropout: 0.1
+  - name: real_lstm_attention_revin
+    model:
+      type: real_lstm_attention_revin
+      hidden_size: 64
+      num_layers: 2
+      dropout: 0.1
+  - name: quaternion_lstm_param_matched
+    model:
+      type: quaternion_lstm
+      hidden_size: 32
+      num_layers: 2
+      dropout: 0.1
+    learning_rate: 0.0005
+  - name: quaternion_lstm_attention_param_matched
+    model:
+      type: quaternion_lstm_attention
+      hidden_size: 32
+      num_layers: 2
+      dropout: 0.1
+    learning_rate: 0.0005
+output:
+  results_dir: experiments/results
+  save_predictions: true
+  save_attention_weights: true

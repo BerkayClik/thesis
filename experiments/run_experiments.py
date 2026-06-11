@@ -25,7 +25,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.data.loader import load_sp500_data, dataframe_to_tensor
 from src.data.preprocessing import preprocess_data, preprocess_data_ratio, normalize_data, select_features
 from src.data.dataset import SP500Dataset
-from src.models import RealLSTM, RealLSTMAttention, QNNAttentionModel, HierarchicalQLSTM
+from src.models import (
+    RealLSTM, RealLSTMAttention, RealLSTMRevIN, RealLSTMAttentionRevIN,
+    QNNAttentionModel, HierarchicalQLSTM,
+)
 from src.models.qnn_attention_model import QuaternionLSTMNoAttention
 from src.training.trainer import Trainer
 from src.training.losses import mse_loss, directional_mse_loss
@@ -175,6 +178,30 @@ def create_model(
             hidden_size=hidden_size,
             num_layers=num_layers,
             dropout=dropout,
+        )
+    elif model_type == "real_lstm_revin":
+        return RealLSTMRevIN(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
+            target_col=target_col,
+            norm_type=norm_type,
+            seq_len=seq_len,
+            dish_init=dish_init,
+            target_mode=target_mode,
+        )
+    elif model_type == "real_lstm_attention_revin":
+        return RealLSTMAttentionRevIN(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout,
+            target_col=target_col,
+            norm_type=norm_type,
+            seq_len=seq_len,
+            dish_init=dish_init,
+            target_mode=target_mode,
         )
     elif model_type == "quaternion_lstm":
         return QuaternionLSTMNoAttention(
@@ -808,6 +835,7 @@ def run_experiment(
         has_internal_norm = (
             'quaternion' in model_config['type']
             or model_config['type'].startswith('hier_qlstm_')
+            or model_config['type'].endswith('_revin')
         )
         needs_denorm = not has_internal_norm
 
@@ -1017,6 +1045,9 @@ def main():
                         help='Reduce output verbosity')
     parser.add_argument('--debug', action='store_true',
                         help='Enable debug mode (track gradients, weight stats)')
+    parser.add_argument('--results-dir', type=str, default=None,
+                        help='Override the output results directory (takes '
+                             'precedence over the configs)')
     args = parser.parse_args()
 
     # Load configs
@@ -1045,7 +1076,12 @@ def main():
     # Get output settings - prefer base (data) config's output.results_dir so results
     # land where the analysis notebooks expect them
     base_output = base_config.get('output', {}).get('results_dir')
-    if base_output:
+    if args.results_dir:
+        output_dir = args.results_dir
+        experiment_name = os.path.basename(output_dir.rstrip('/'))
+        # Keep checkpoint paths (derived from config) inside the override too
+        base_config.setdefault('output', {})['results_dir'] = output_dir
+    elif base_output:
         output_dir = base_output
         experiment_name = os.path.basename(base_output)
     else:
