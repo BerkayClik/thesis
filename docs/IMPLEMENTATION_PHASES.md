@@ -1,5 +1,8 @@
 # IMPLEMENTATION_PHASES.md
 
+Phases 0–8 are complete. Phases 9–12 reflect the 2026 extensions; current
+status of runs and findings is tracked in FINDINGS.md.
+
 ## Phase 0 – Setup
 - Initialize repo structure
 - Setup config system
@@ -66,3 +69,40 @@
 - Integrate 6 hierarchical variants into experiment runner
 - Create data configs for hourly and 4-hourly hierarchical experiments
 - Create Colab notebooks for reproducible execution
+
+---
+
+## Phase 9 – LunarCrush Migration & Multi-Asset Data
+- Replace Yahoo Finance with LunarCrush as the primary BTC data source
+  (daily / hourly / 4-hourly, 2020–2026)
+- Add data configs for ETH, SOL, XRP, BNB
+- Feature selection over the 18 LunarCrush columns (4 OHLC / 16 hierarchical)
+- 1h → 4h resampling script; data caching in `data/cache/`
+
+## Phase 10 – Returns-Mode Training & Portfolio Backtesting
+- `target_mode: price | return | log_return` with leakage-free price
+  reconstruction
+- Per-bar test **and validation** predictions CSVs from the runner
+- Isolated `.venv-backtest` env (vectorbt needs numpy<2)
+- Single-coin vectorbt backtest (next-bar-open execution), multi-coin
+  pooled basket, alignment-gate script
+- Batch backtesting (`scripts/backtest_all.py`): long-only and long/short
+  dead-band strategies (hysteresis), multi-seed aggregation,
+  validation-selected thresholds (`--threshold auto`), fee-sensitivity grid
+
+## Phase 11 – Normalization Ablations
+- Dish-TS as a RevIN alternative for quaternion models (`norm_type: dish_ts`)
+- RevIN-wrapped real baselines (`real_lstm_revin`,
+  `real_lstm_attention_revin`) to de-confound architecture vs normalization
+- Ablation configs (daily + 4-hourly, 3 seeds) and the
+  `RevIN_Ablation_BTC_Daily_4Hourly` Colab notebook
+- **Status:** smoke-tested; full Colab run pending
+
+## Phase 12 – Robustness & Honest Evaluation (in progress)
+- Re-run the incomplete 4-hourly full-data run (data-starvation hypothesis)
+- Complete the RevIN ablation run
+- Investigate the seed-consistent negative correlation of daily
+  hierarchical return-mode models
+- Planned: walk-forward (rolling-window) evaluation; fix
+  `shuffle=False` in training DataLoaders (together with a re-run, since
+  it breaks comparability with existing results)

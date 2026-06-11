@@ -16,7 +16,9 @@
 
 This thesis investigates the application of **Quaternion Neural Networks (QNNs)** to financial time series forecasting. By encoding OHLC (Open, High, Low, Close) price data as quaternions, we hypothesize that the Hamilton product can capture cross-feature correlations that traditional real-valued networks miss.
 
-We compare four model architectures across seven experimental variants, using Bitcoin (BTC-USD) as our primary test asset with data from 2014-2024. The framework supports multiple assets (BTC, S&P 500, Gold) and data frequencies (daily, hourly, 4-hourly).
+We compare five model architectures across thirteen core experimental variants (plus normalization-ablation variants), using Bitcoin as the primary test asset with LunarCrush data from 2020-02-14 to 2026-02-12. The framework supports multiple assets (BTC, ETH, SOL, XRP, BNB via LunarCrush; S&P 500 and Gold via Yahoo Finance), data frequencies (daily, hourly, 4-hourly), price- and return-mode targets, and fee-aware portfolio backtesting.
+
+> **Current empirical status:** see [docs/FINDINGS.md](docs/FINDINGS.md). In short: return-mode models show no exploitable signal so far, the apparent price-mode gap between quaternion and real models is largely a normalization confound (RevIN vs Z-score — now isolated by a dedicated ablation), and the test windows are bear markets, which handicaps long-only backtests.
 
 ---
 
@@ -116,41 +118,46 @@ Since quaternion layers have ~4x more parameters at equal hidden size, we test b
 | `hier_qlstm_meta_quat` | Hierarchical QLSTM (meta-quat) | 32 | ~232K | Novel quaternion fusion |
 | `hier_qlstm_meta_quat_attn` | Hierarchical QLSTM (meta-quat+attn) | 32 | ~232K | Full model |
 
+**Ablation variants** (beyond the 13 core variants):
+
+- `real_lstm_revin` / `real_lstm_attention_revin` — the real LSTM backbones wrapped in the same per-window RevIN normalization the quaternion models use. This de-confounds architecture from normalization (the standard comparison gives RevIN only to quaternion models). Configs: `configs/experiments/daily_revin_ablation_3seed.yaml`, `4hourly_revin_ablation_3seed.yaml`.
+- `qlstm_*_dishts_*` — quaternion variants using **Dish-TS** instead of RevIN (`norm_type: dish_ts`). Configs: `configs/experiments/daily_dishts.yaml`, `4hourly_dishts.yaml`, `hourly_dishts.yaml`.
+
 ### Data Configuration
 
-The primary configuration uses daily BTC data:
+The primary configuration uses daily BTC data from LunarCrush (18 raw columns: OHLC + market + social + sentiment; 4 selected for OHLC experiments, 16 for hierarchical):
 
 ```yaml
-Asset:        Bitcoin (BTC-USD)
-Period:       2014-09-17 to 2024-12-31
-Features:     Open, High, Low, Close (OHLC)
-Target:       Next-day normalized Close price
-Window:       20 trading days
+Asset:        Bitcoin (LunarCrush, data/cache/lunarcrush_btc_day_full.csv)
+Period:       2020-02-14 to 2026-02-12 (~2,190 daily bars; ~13,150 4-hourly bars)
+Features:     OHLC (4 of 18) or 16-feature hierarchical selection
+Target:       Next-bar Close — price, return, or log_return (target_mode)
+Window:       20 bars (daily), 30 bars (4-hourly), 72 bars (hourly)
 ```
 
-Multiple data frequencies are supported:
+Multiple data frequencies are supported, all with ratio-based 70/10/20 splits for BTC (year-based splitting remains available for the long-history Yahoo Finance assets, e.g. `configs/data/daily/sp500.yaml`):
 
-| Frequency | Window Size | Splitting | Config Example |
-|-----------|-------------|-----------|----------------|
-| Daily | 20 days | Year-based (train/val/test by year boundaries) | `configs/data/daily/btc.yaml` |
-| Hourly | 72 bars (3 days) | Ratio-based (70/10/20) | `configs/data/hourly/btc.yaml` |
-| 4-Hourly | 30 bars (5 days) | Ratio-based (70/10/20) | `configs/data/4hourly/btc.yaml` |
-| Hourly (Hierarchical) | 72 bars (3 days) | Ratio-based (70/10/20) | `configs/data/hourly/btc_hier.yaml` |
-| 4-Hourly (Hierarchical) | 30 bars (5 days) | Ratio-based (70/10/20) | `configs/data/4hourly/btc_hier.yaml` |
+| Frequency | Window Size | Config Example |
+|-----------|-------------|----------------|
+| Daily OHLC | 20 bars | `configs/data/daily/btc_ohlc.yaml` (+ `_return` variant) |
+| Daily Hierarchical (16 features) | 20 bars | `configs/data/daily/btc_hier.yaml` (+ `_return`) |
+| Hourly | 72 bars | `configs/data/hourly/btc_ohlc.yaml` |
+| 4-Hourly OHLC | 30 bars | `configs/data/4hourly/btc_ohlc.yaml` (+ `_return`, `_full`) |
+| 4-Hourly Hierarchical | 30 bars | `configs/data/4hourly/btc_hier.yaml` (+ `_return`, `_full`) |
+
+The standard 4-hourly configs train on the **last 365 days** (`last_n_days: 365`); the `*_full.yaml` configs use the full ~13k-bar history to test the data-starvation hypothesis.
 
 ### Temporal Split (No Look-Ahead Bias)
 
-**Daily data** uses year-based splitting:
+All BTC configs use sequential ratio-based splitting (70/10/20):
 
 ```
-Timeline: 2014 ────────────────────────────────────────────────> 2024
+Timeline: 2020-02 ──────────────────────────────────────────> 2026-02
 
-          |<─────── TRAIN ───────>|<── VAL ──>|<──── TEST ────>|
-          |      2014-2021        |    2022    |   2023-2024    |
-          |       7+ years        |   1 year   |    2 years     |
+          |<─────── TRAIN (70%) ───────>|< VAL (10%) >|< TEST (20%) >|
 ```
 
-**Hourly/4-hourly data** uses ratio-based splitting (70/10/20) since year boundaries don't apply to rolling-window intraday data.
+With the full daily range this puts the test window at **2024-12-20 → 2026-02-11** — a bear-market period (buy & hold −32.5%); see [docs/FINDINGS.md](docs/FINDINGS.md) for why that matters when interpreting backtests. Year-based splitting (train ≤ 2021 / val 2022 / test ≥ 2023) is used for S&P 500 and Gold daily configs.
 
 ---
 
@@ -174,64 +181,71 @@ The 3-class metrics classify returns into UP, FLAT, or DOWN based on a configura
 thesis/
 ├── configs/
 │   ├── data/                         # Per-asset, per-frequency data configs
-│   │   ├── daily/
-│   │   │   ├── btc.yaml              # BTC daily (2014-2024, year-based split)
-│   │   │   ├── btc_single.yaml       # BTC daily single-seed variant
-│   │   │   ├── sp500.yaml            # S&P 500 daily
-│   │   │   └── gold.yaml             # Gold daily
-│   │   ├── hourly/
-│   │   │   ├── btc.yaml              # BTC hourly (ratio-based split)
-│   │   │   ├── sp500.yaml            # S&P 500 hourly
-│   │   │   └── gold.yaml             # Gold hourly
-│   │   │   └── 4hourly/
-│   │       ├── btc.yaml              # BTC 4-hourly (resampled from 1h)
-│   │       └── btc_hier.yaml         # BTC 4-hourly hierarchical (16 features)
+│   │   ├── daily/                    # btc_ohlc, btc_ohlc_return, btc_hier, btc_hier_return,
+│   │   │                             # btc_lunar, eth/sol/xrp/bnb (_ohlc/_lunar), sp500, gold
+│   │   ├── hourly/                   # btc_ohlc, btc_hier, btc_*_730d, alts, sp500, gold
+│   │   └── 4hourly/                  # btc_ohlc/_return/_full, btc_hier/_return/_full, alts
 │   └── experiments/                  # Experiment variant definitions
-│       ├── full_comparison.yaml      # Full 7-variant × 3-seed comparison
-│       ├── quick_test.yaml           # Quick single-seed iteration
-│       ├── daily_btc_single.yaml     # Daily BTC single-seed
-│       ├── 4hourly_btc.yaml          # 4-hourly BTC experiments
-│       ├── hourly_hierarchical.yaml  # Hourly hierarchical QLSTM (6 variants)
-│       └── 4hourly_hierarchical.yaml # 4-hourly hierarchical QLSTM (6 variants)
+│       ├── daily_comparison_3seed.yaml        # 7 OHLC variants × 3 seeds
+│       ├── daily_hierarchical_3seed.yaml      # 6 hierarchical variants × 3 seeds
+│       ├── 4hourly_comparison_3seed.yaml      # 4-hourly equivalents
+│       ├── 4hourly_hierarchical_3seed.yaml
+│       ├── daily_revin_ablation_3seed.yaml    # real_lstm ± RevIN vs quaternion
+│       ├── 4hourly_revin_ablation_3seed.yaml
+│       ├── daily_dishts.yaml / 4hourly_dishts.yaml / hourly_dishts.yaml  # Dish-TS ablation
+│       └── quick_test.yaml                    # Quick single-seed iteration
 │
 ├── src/
 │   ├── data/
-│   │   ├── loader.py                 # Data downloading & caching
-│   │   ├── preprocessing.py          # Normalization, splitting, quaternion encoding
+│   │   ├── loader.py                 # Data loading & caching (LunarCrush / Yahoo)
+│   │   ├── lunarcrush_api.py         # LunarCrush API client
+│   │   ├── preprocessing.py          # Normalization, splitting, return targets
 │   │   └── dataset.py                # Sliding window PyTorch Dataset
 │   │
 │   ├── models/
-│   │   ├── real_lstm.py              # Standard LSTM baseline
+│   │   ├── real_lstm.py              # Standard LSTM baseline (Z-score)
 │   │   ├── real_lstm_attention.py    # LSTM + Temporal Attention
+│   │   ├── real_lstm_revin.py        # RevIN-wrapped real baselines (ablation)
+│   │   ├── revin.py                  # Reversible Instance Normalization
+│   │   ├── dish_ts.py                # Dish-TS normalization (RevIN alternative)
 │   │   ├── quaternion_ops.py         # Hamilton product & QuaternionLinear
 │   │   ├── quaternion_lstm.py        # Quaternion LSTM cell & stacked layer
 │   │   ├── qnn_attention_model.py    # Quaternion LSTM + Attention model
 │   │   ├── hierarchical_qlstm.py     # Hierarchical QLSTM (4 groups × 3 fusions)
 │   │   └── attention.py              # Temporal attention mechanism
 │   │
-│   ├── training/
-│   │   ├── trainer.py                # Training loop with early stopping
-│   │   └── losses.py                 # Loss functions
-│   │
-│   ├── evaluation/
-│   │   ├── metrics.py                # MAPE
-│   │   ├── directional_accuracy.py   # Binary & 3-class directional accuracy
-│   │   └── sharpe_ratio.py           # Binary & 3-class Sharpe ratio
-│   │
-│   └── utils/
-│       └── config.py                 # Config loading and merging
+│   ├── training/                     # Trainer (early stopping) & losses
+│   ├── evaluation/                   # MAPE, directional accuracy, Sharpe (binary & 3-class)
+│   ├── backtesting/                  # vectorbt adapter, signals, basket, plots, compare
+│   └── utils/                        # Config loading and merging
 │
 ├── experiments/
-│   ├── run_experiments.py            # Main experiment runner
+│   ├── run_experiments.py            # Main experiment runner (writes test + val predictions CSVs)
 │   ├── visualize_results.py          # Results visualization
-│   └── results/                      # JSON results & checkpoints
+│   └── results/                      # JSON results, predictions CSVs (git-ignored)
 │
-├── notebooks/
-│   ├── Hierarchical_QLSTM_BTC_Hourly.ipynb    # Colab notebook (hourly)
-│   └── 4Hourly_Hierarchical_QLSTM_BTC.ipynb   # Colab notebook (4-hourly)
+├── scripts/
+│   ├── backtest_all.py               # Batch backtests: long-only / long-short dead band,
+│   │                                 # multi-seed, auto threshold, fee grid
+│   ├── verify_alignment.py           # Predictions-CSV alignment gate
+│   ├── backtest_env_smoke.py         # Backtest env sanity check
+│   ├── download_lunarcrush.py        # Data download
+│   ├── resample_4hourly.py           # 1h → 4h resampling
+│   └── feature_selection.py          # LunarCrush feature selection analysis
+│
+├── notebooks/                        # Colab notebooks (resumable from Drive checkpoints)
+│   ├── All_Methods_Backtest_BTC_Daily.ipynb
+│   ├── All_Methods_Comparison_BTC_4Hourly.ipynb
+│   ├── All_Methods_FullData_Backtest_BTC_4Hourly.ipynb
+│   ├── RevIN_Ablation_BTC_Daily_4Hourly.ipynb
+│   ├── Returns_Backtest_BTC_4Hourly.ipynb
+│   ├── Hierarchical_QLSTM_BTC_Hourly.ipynb
+│   └── 4Hourly_Hierarchical_QLSTM_BTC.ipynb
 │
 └── docs/
     ├── ARCHITECTURE.md               # Detailed technical documentation
+    ├── BACKTESTING.md                # Returns-mode training & portfolio backtesting
+    ├── FINDINGS.md                   # Empirical results & open issues (June 2026)
     ├── SPEC.md                       # Project specification
     ├── LITERATURE_SCOPE.md           # Research background
     ├── IMPLEMENTATION_PHASES.md      # Development phases & milestones
@@ -266,32 +280,33 @@ pip install torch pyyaml pandas numpy scipy
 ### Running Experiments
 
 ```bash
-# Run full experiment suite (7 variants x 3 seeds) on daily BTC data
+# OHLC comparison (7 variants x 3 seeds) on daily BTC data
 python experiments/run_experiments.py \
-    --base-config configs/data/daily/btc.yaml \
-    --experiment-config configs/experiments/full_comparison.yaml
+    --base-config configs/data/daily/btc_ohlc.yaml \
+    --experiment-config configs/experiments/daily_comparison_3seed.yaml
+
+# Same in return mode (the backtest-relevant target)
+python experiments/run_experiments.py \
+    --base-config configs/data/daily/btc_ohlc_return.yaml \
+    --experiment-config configs/experiments/daily_comparison_3seed.yaml
+
+# Hierarchical QLSTM (16 LunarCrush features, 6 variants x 3 seeds)
+python experiments/run_experiments.py \
+    --base-config configs/data/daily/btc_hier.yaml \
+    --experiment-config configs/experiments/daily_hierarchical_3seed.yaml
+
+# RevIN ablation (de-confound architecture vs normalization)
+python experiments/run_experiments.py \
+    --base-config configs/data/daily/btc_ohlc.yaml \
+    --experiment-config configs/experiments/daily_revin_ablation_3seed.yaml
 
 # Quick iteration (fewer epochs, single seed)
 python experiments/run_experiments.py \
-    --base-config configs/data/daily/btc.yaml \
+    --base-config configs/data/daily/btc_ohlc.yaml \
     --experiment-config configs/experiments/quick_test.yaml
-
-# Run on 4-hourly BTC data
-python experiments/run_experiments.py \
-    --base-config configs/data/4hourly/btc.yaml \
-    --experiment-config configs/experiments/4hourly_btc.yaml
-
-# Run hierarchical QLSTM experiments (4-hourly, 16 features)
-python experiments/run_experiments.py \
-    --base-config configs/data/4hourly/btc_hier.yaml \
-    --experiment-config configs/experiments/4hourly_hierarchical.yaml
-
-# Run with debug mode (gradient tracking)
-python experiments/run_experiments.py \
-    --base-config configs/data/daily/btc.yaml \
-    --experiment-config configs/experiments/full_comparison.yaml \
-    --debug
 ```
+
+Useful flags: `--debug` (gradient tracking), `--quiet`, `--results-dir <dir>` (override output location). Full-scale runs are executed in Colab via the notebooks in `notebooks/`, which checkpoint to Google Drive and are resumable across disconnects.
 
 **Config structure:** The `--base-config` provides data source, window size, split boundaries, training hyperparameters, and evaluation settings. The `--experiment-config` defines which model variants to run and with which seeds.
 
@@ -299,8 +314,8 @@ python experiments/run_experiments.py \
 
 Two additive capabilities (the default price workflow above is unchanged):
 
-- **Train on returns** — set `target_mode: return` (or `log_return`) under `data:` in any base config. The model predicts a return; prices are reconstructed for the existing metrics. Default is `price`.
-- **Portfolio backtest** — feed model predictions into a leakage-free, fee-aware vectorbt portfolio (next-bar-open execution) and measure real performance (total return, Sharpe, Sortino, max drawdown, equity curve), single-coin or as a pooled multi-coin basket.
+- **Train on returns** — set `target_mode: return` (or `log_return`) under `data:` in any base config. The model predicts a return; prices are reconstructed for the existing metrics. Default is `price`. Each run writes per-bar **test and validation predictions CSVs** alongside the results JSON.
+- **Portfolio backtest** — feed model predictions into a leakage-free, fee-aware vectorbt portfolio (next-bar-open execution) and measure real performance (total return, Sharpe, Sortino, max drawdown, equity curve), single-coin or as a pooled multi-coin basket. `scripts/backtest_all.py` supports **long-only and long/short dead-band strategies** (with hysteresis), multi-seed aggregation (`--seeds`), validation-selected thresholds (`--threshold auto` — no test-set tuning), and fee-sensitivity grids (`--fee-grid`).
 
 The backtester runs in an **isolated env** (vectorbt needs `numpy<2`, incompatible with the main env):
 
@@ -343,33 +358,15 @@ This structured mixing of OHLC components may capture relationships that element
 
 ---
 
-## Sample Results
+## Results So Far
 
-```
-================================================================================
-EXPERIMENT RESULTS
-================================================================================
-Model                          MAPE (%)           Dir Acc (%)        Sharpe
---------------------------------------------------------------------------------
-naive_zero                     X.XX +- 0.00       50.00 +- 0.00      0.000 +- 0.000
-real_lstm                      X.XX +- X.XX       XX.XX +- X.XX      X.XXX +- X.XXX
-real_lstm_attention            X.XX +- X.XX       XX.XX +- X.XX      X.XXX +- X.XXX
-quaternion_lstm_param_matched  ...                 ...                ...
-...
-================================================================================
+Full detail in **[docs/FINDINGS.md](docs/FINDINGS.md)**. Headline findings from the June 2026 daily + 4-hourly runs:
 
-STATISTICAL SIGNIFICANCE (vs real_lstm baseline)
---------------------------------------------------------------------------------
-Model                               Metric                   p-value      Cohens d     Significant
---------------------------------------------------------------------------------
-quaternion_lstm_param_matched       directional_accuracy     X.XXXX       X.XXX        *
-...
---------------------------------------------------------------------------------
-* p < 0.05, ** p < 0.01
-================================================================================
-```
-
-*(Placeholder format -- actual values from experiment runs)*
+- **Return mode has no exploitable signal yet** — corr(pred, true) ≈ 0 across all models and seeds; models collapse toward persistence. Daily hierarchical return-mode models are seed-consistently *anti*-predictive (corr −0.01 to −0.06).
+- **Price-mode quaternion models show the only seed-consistent positive correlation** (~0.09–0.13 daily), but fee-aware backtests of those predictions still lose money.
+- **The price-mode MAPE gap is largely a normalization confound, not quaternion algebra**: a smoke test of the RevIN ablation shows `real_lstm_revin` at MAPE 2.3% vs 17.6% for the Z-scored `real_lstm`. The full 3-seed ablation run is pending.
+- **Test windows are bear markets** (daily: 2024-12 → 2026-02, buy & hold −32.5%), so long-only backtests are structurally handicapped — hence the long/short dead-band strategy in `scripts/backtest_all.py`.
+- Pending: full RevIN ablation run, and re-running the incomplete 4-hourly full-data (data-starvation) experiment.
 
 ---
 
@@ -383,6 +380,7 @@ quaternion_lstm_param_matched       directional_accuracy     X.XXXX       X.XXX 
 | [IMPLEMENTATION_PHASES.md](docs/IMPLEMENTATION_PHASES.md) | Development phases & milestones |
 | [REPO_STRUCTURE.md](docs/REPO_STRUCTURE.md) | Repository structure reference |
 | [BACKTESTING.md](docs/BACKTESTING.md) | Returns-mode training & vectorbt portfolio backtesting |
+| [FINDINGS.md](docs/FINDINGS.md) | Empirical results, open issues, and run status (June 2026) |
 
 ---
 
@@ -395,8 +393,10 @@ quaternion_lstm_param_matched       directional_accuracy     X.XXXX       X.XXX 
 - **Multi-Seed Evaluation:** 3 seeds per variant with statistical significance testing (paired t-test, Cohen's d)
 - **Optimized Quaternion Ops:** QuaternionLinear uses matmul-based Hamilton product (4 matrix multiplications) instead of naive broadcast, and QuaternionLSTMCell uses fused gate computation (2 QuaternionLinear calls instead of 8)
 - **3-Class Metrics:** Directional accuracy and Sharpe ratio with configurable flat zone threshold based on training return standard deviation
-- **Multi-Frequency Support:** Daily (year-based split), hourly and 4-hourly (ratio-based split) data configurations
+- **Multi-Frequency Support:** Daily, hourly and 4-hourly configurations (ratio-based 70/10/20 splits for BTC; year-based splits for long-history S&P 500 / Gold)
 - **Hierarchical Multi-Feature Support:** 16 LunarCrush features (price, market, social, sentiment) grouped into 4 semantic quaternions with 3 fusion strategies (concat, group attention, meta-quaternion)
+- **Normalization Ablations:** RevIN-wrapped real baselines (`real_lstm_revin`) and Dish-TS variants isolate the normalization effect from the architecture effect
+- **Honest Evaluation:** Fee-aware vectorbt backtests with next-bar-open execution, validation-selected thresholds, and fee-sensitivity grids — the legacy in-sample Sharpe is kept only for comparability
 
 ---
 
@@ -404,6 +404,8 @@ quaternion_lstm_param_matched       directional_accuracy     X.XXXX       X.XXX 
 
 - Parcollet, T., et al. (2019). *Quaternion Recurrent Neural Networks*. ICLR.
 - Gaudet, C. & Maida, A. (2018). *Deep Quaternion Networks*. IJCNN.
+- Kim, T., et al. (2022). *Reversible Instance Normalization for Accurate Time-Series Forecasting against Distribution Shift*. ICLR.
+- Fan, W., et al. (2023). *Dish-TS: A General Paradigm for Alleviating Distribution Shift in Time Series Forecasting*. AAAI.
 - Hochreiter, S., & Schmidhuber, J. (1997). *Long Short-Term Memory*. Neural Computation.
 - Vaswani, A., et al. (2017). *Attention Is All You Need*. NeurIPS.
 - Jozefowicz, R., et al. (2015). *An Empirical Exploration of Recurrent Network Architectures*. ICML.

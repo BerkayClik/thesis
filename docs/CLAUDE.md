@@ -14,6 +14,15 @@
 pip install torch pyyaml pandas numpy
 ```
 
+### Backtesting Environment (separate!)
+vectorbt requires `numpy<2`, incompatible with the main env. Backtesting code
+(`src/backtesting/`, `scripts/backtest_all.py`) runs in the isolated
+`.venv-backtest` (Python 3.11, `uv venv` + `requirements-backtest.txt`):
+```bash
+.venv-backtest/bin/python scripts/backtest_all.py ...
+```
+Never install vectorbt/numba into the main `thesis` env. See docs/BACKTESTING.md.
+
 ---
 
 ## General Rules
@@ -47,3 +56,8 @@ pip install torch pyyaml pandas numpy
   - Model architectures (LSTM, attention, quaternion layers)
   - Training loop (loss functions, optimizers, early stopping)
   - Evaluation metrics or methodology
+- **Update `docs/FINDINGS.md`** when a major experiment or backtest run
+  completes (or fails) — it is the single source of truth for empirical
+  status and open issues
+- **Update `docs/BACKTESTING.md`** when changing anything under
+  `src/backtesting/` or `scripts/backtest_all.py`

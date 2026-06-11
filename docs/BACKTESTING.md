@@ -222,3 +222,12 @@ per-coin runs.
   the optimism of filling on the same bar the prediction was made.
 - A low MAPE on prices can be misleading (a persistence model scores well on
   MAPE but has no tradeable edge). The portfolio backtest is the honest judge.
+- **Empirical status (June 2026):** the daily and 4h return-mode backtests to
+  date lose money — predictions have ≈ zero correlation with realized returns,
+  the test windows are bear markets (daily buy & hold −32.5%), and fees add
+  5–20 pts of drag but are not the root cause (gross backtests also lose).
+  See `docs/FINDINGS.md` before quoting any backtest number in the thesis.
+- The long/short dead-band strategy, `--threshold auto`, `--seeds`, and
+  `--fee-grid` were added in direct response to those findings (long-only is
+  structurally handicapped in a bear test window; thresholds must come from
+  validation, not test).

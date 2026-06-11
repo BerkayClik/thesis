@@ -12,9 +12,16 @@
 - Hamilton product implementations
 - Quaternion RNN/LSTM formulations
 
-### Evaluation
+### Normalization for Non-Stationary Series
+- RevIN (Kim et al., ICLR 2022) — reversible instance normalization
+- Dish-TS (Fan et al., AAAI 2023) — asymmetric forward/inverse statistics
+- Distribution-shift handling in financial forecasting
+
+### Evaluation & Backtesting
 - Directional accuracy
 - Financial regression metrics
+- Fee/slippage-aware portfolio backtesting protocols
+  (next-bar execution, no test-set parameter tuning)
 
 ---
 

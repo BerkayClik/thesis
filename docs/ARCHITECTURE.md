@@ -11,6 +11,8 @@ A technical guide for CS students explaining the neural network architectures in
 3. [Background: LSTM Networks](#background-lstm-networks)
 4. [Background: Quaternions](#background-quaternions)
 5. [RevIN: Reversible Instance Normalization](#revin-reversible-instance-normalization)
+    - [Dish-TS: An Alternative to RevIN](#dish-ts-an-alternative-to-revin)
+    - [Why this matters: the normalization confound](#why-this-matters-the-normalization-confound)
 6. [Model 1: Real LSTM (Baseline)](#model-1-real-lstm-baseline)
 7. [Model 2: Real LSTM + Attention](#model-2-real-lstm--attention)
 8. [Model 3: Quaternion LSTM](#model-3-quaternion-lstm)
@@ -31,6 +33,7 @@ A technical guide for CS students explaining the neural network architectures in
     - [Evaluation Metrics](#evaluation-metrics)
     - [Complete Training Workflow](#complete-training-workflow)
     - [Multi-Seed Experiments](#multi-seed-experiments)
+13. [Known Limitations (current state)](#known-limitations-current-state)
 
 ---
 
@@ -251,6 +254,16 @@ class RevIN(nn.Module):
 - Statistics are `.detach()`ed — no gradient flows through normalization stats
 
 Inspired by: Kim et al., "Reversible Instance Normalization for Accurate Time-Series Forecasting against Distribution Shift", ICLR 2022. Reimplemented independently; no code copied from external repositories.
+
+### Dish-TS: An Alternative to RevIN
+
+**File:** `src/models/dish_ts.py`
+
+Quaternion models can swap RevIN for **Dish-TS** (Fan et al., AAAI 2023) via `norm_type: dish_ts` in the model config. Where RevIN reuses the same per-window mean/std for both normalization and denormalization, Dish-TS learns a per-feature, per-timestep mapping (`reduce_mlayer`) that produces *two* location/scale estimates — one for the lookback window (forward direction) and one for the prediction horizon (inverse direction). This lets the model capture asymmetric shift between the input window and the target bar. The implementation is adapted for single-step scalar-output models and is an independent reimplementation of the paper's method. Ablation configs: `configs/experiments/daily_dishts.yaml`, `4hourly_dishts.yaml`, `hourly_dishts.yaml`.
+
+### Why this matters: the normalization confound
+
+Because only quaternion models received RevIN, the original real-vs-quaternion comparison confounds **architecture** with **normalization**. In price mode, the Z-scored real baseline sees test prices far outside its training distribution by construction — a smoke test showed `real_lstm_revin` reaching MAPE ~2.3% where the Z-scored `real_lstm` scored ~17.6%. The RevIN ablation variants (see [Model 1](#model-1-real-lstm-baseline)) exist to isolate the true architecture effect; see `docs/FINDINGS.md` for current status.
 
 ---
 
@@ -1075,6 +1088,8 @@ We run **13 variants** in experiments. This includes a naive baseline, 6 OHLC-ba
 
 **Hierarchical variants (hidden=32):** All 6 hierarchical variants use `hidden_size=32` for parameter-matched comparison. They operate on 16 LunarCrush features rather than 4 OHLC features.
 
+**Ablation variants (beyond the 13):** `real_lstm_revin` / `real_lstm_attention_revin` (RevIN-wrapped real baselines, the normalization-confound control) and the Dish-TS quaternion variants (`norm_type: dish_ts`). These run in their own experiment configs (`*_revin_ablation_3seed.yaml`, `*_dishts.yaml`) rather than in the core comparison.
+
 ### Parameter Count Comparison
 
 **Baseline models (hidden_size=64):**
@@ -1143,7 +1158,7 @@ The research question: **Does quaternion encoding help predict stock prices?**
 > **Note:** This diagram covers the original 4-feature (OHLC) path used by Models 1-4. Hierarchical QLSTM (Model 5) follows a different path: 16 LunarCrush features enter RevIN, are split into 4 groups of 4, processed by 4 independent QLSTMs, and combined by a fusion module before the output head. That path is described in full in the [Model 5 section](#model-5-hierarchical-quaternion-lstm).
 
 ```
-Raw OHLC Data (e.g., BTC-USD from Yahoo Finance)
+Raw OHLC Data (LunarCrush cache for BTC/alts; Yahoo Finance for S&P 500 / Gold)
          │
          ▼
 ┌──────────────────────────────────┐
@@ -1642,6 +1657,17 @@ Statistical significance is computed using:
 - **Independent t-test:** Fallback when seed counts differ
 - **Cohen's d:** Effect size magnitude
 - **p-values:** Significance at 0.05 and 0.01 levels
+
+---
+
+## Known Limitations (current state)
+
+Tracked in detail in `docs/FINDINGS.md`; the load-bearing ones for interpreting results:
+
+- **Training DataLoaders use `shuffle=False`** — batches arrive in temporal order during training. Fixing this invalidates comparability with completed runs, so it is deferred to a coordinated re-run.
+- **Single fixed temporal split** — walk-forward / rolling-window evaluation is specified (SPEC.md) but not implemented. The current BTC test windows fall in a bear market, which colors all long-only backtest results.
+- **The in-experiment `sharpe_ratio` metric is a frictionless toy** (sign-of-prediction strategy, no fees, no execution model). Real tradeability is judged only by the vectorbt backtest (`docs/BACKTESTING.md`).
+- **Return-mode (`target_mode: return`) training currently produces near-zero-correlation predictions** that collapse toward persistence — see FINDINGS.md before building on those results.
 
 ---
 
