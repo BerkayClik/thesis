@@ -137,6 +137,41 @@ Outputs in `--outdir`:
 - `<label>_trades.csv` — per-trade records
 - `<label>_equity.csv` — equity curve series
 
+### Batch backtests: long/short, dead band, multi-seed, fee grid
+
+`scripts/backtest_all.py` backtests every variant in a results dir and supports
+two strategies:
+
+- `--strategy long_only` (default, legacy): long when `pred_return > threshold`,
+  flat otherwise.
+- `--strategy long_short`: target positions +1 / -1 / 0 with a symmetric dead
+  band of half-width `threshold` around zero. Inside the band, `--exit-mode hold`
+  (default) keeps the previous position (hysteresis, cuts fee churn);
+  `--exit-mode flat` exits to cash. Orders fire only on position *changes*, so
+  holding pays no fees.
+
+```bash
+.venv-backtest/bin/python scripts/backtest_all.py \
+    --results-dir experiments/results/daily_btc_ohlc_return \
+    --ohlc data/cache/lunarcrush_btc_day_full.csv \
+    --seeds 42,123,2024 --strategy long_short --threshold auto \
+    --exit-mode hold --freq 1d --fee-grid 0,0.0005,0.001,0.0025
+```
+
+- `--seeds` backtests every listed seed; `<label>_summary.csv` gets one row per
+  variant x seed and `<label>_summary_agg.csv` the mean ± std across seeds.
+- `--threshold auto` sweeps the dead band per variant+seed on the **validation**
+  predictions CSV (`<variant>_seed<seed>_val_predictions.csv`, written by
+  `run_experiments.py` alongside the test CSV) and freezes the winner before
+  touching test — no test-set tuning. Runs that predate val CSVs fall back to
+  0.0 with a warning.
+- `--fee-grid` adds `<label>_fee_sensitivity.csv` (variant x per-side fee →
+  net return / Sharpe / trades), for "signal supports trading below X bps"
+  claims instead of a single fee assumption.
+
+Caveat for the thesis: the long/short backtest assumes shorts are available at
+symmetric cost (no funding/borrow fees) — state this simplification explicitly.
+
 ### Equity & drawdown plots
 
 ```bash

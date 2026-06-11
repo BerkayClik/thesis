@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 import vectorbt as vbt
 
-from src.backtesting.signals import build_long_only_signals
+from src.backtesting.signals import build_long_only_signals, build_position_signals
 
 
 def load_ohlc(path):
@@ -51,6 +51,55 @@ def run_single_coin_backtest(
         price,
         entries=sig["entries"].to_numpy(),
         exits=sig["exits"].to_numpy(),
+        init_cash=init_cash,
+        fees=fees,
+        slippage=slippage,
+        freq=freq,
+    )
+    return pf, sig
+
+
+def run_position_backtest(
+    predictions,
+    ohlc,
+    threshold=0.0,
+    allow_short=True,
+    exit_mode="hold",
+    init_cash=10_000.0,
+    fees=0.001,
+    slippage=0.0005,
+    freq="4h",
+):
+    """Run a target-position backtest (long/short/flat) at next-bar opens.
+
+    Positions come from ``build_position_signals`` (+1/-1/0 with a dead band).
+    Orders are submitted only on position *changes* (size is NaN elsewhere), so
+    holding a position across bars never pays fees or rebalances.
+
+    Returns (portfolio, signals).
+    """
+    sig = build_position_signals(
+        predictions, ohlc,
+        threshold=threshold, allow_short=allow_short, exit_mode=exit_mode,
+    )
+    if len(sig) == 0:
+        raise ValueError("No executable signals (no predictions matched OHLC opens).")
+
+    price = pd.Series(sig["exec_price"].to_numpy(), index=sig.index)
+    position = sig["position"].to_numpy()
+
+    # Order only at transitions: target percent at change bars, NaN = no order.
+    size = np.full(len(position), np.nan)
+    prev = 0.0
+    for i, p in enumerate(position):
+        if p != prev:
+            size[i] = p
+            prev = p
+
+    pf = vbt.Portfolio.from_orders(
+        price,
+        size=size,
+        size_type="targetpercent",
         init_cash=init_cash,
         fees=fees,
         slippage=slippage,

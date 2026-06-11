@@ -431,6 +431,9 @@ def run_single_experiment(
     test_decision_times=None,
     test_target_times=None,
     predictions_dir=None,
+    val_prev_closes=None,
+    val_decision_times=None,
+    val_target_times=None,
 ) -> Dict:
     """
     Run a single experiment with one model configuration and seed.
@@ -574,6 +577,25 @@ def run_single_experiment(
             pred_closes=test_metrics['predictions'],
             true_closes=test_metrics['targets'],
         )
+
+        # Validation predictions: used by the backtester to select trading
+        # thresholds (dead band) on val and freeze them before touching test.
+        if val_decision_times is not None and val_target_times is not None:
+            val_metrics = evaluate_model(model, val_loader, device, norm_stats,
+                                         flat_threshold_fraction=flat_threshold_fraction,
+                                         needs_denorm=needs_denorm,
+                                         target_col=target_col,
+                                         target_mode=target_mode,
+                                         prev_closes=val_prev_closes)
+            write_predictions_csv(
+                os.path.join(predictions_dir,
+                             f"{variant_name}_seed{seed}_val_predictions.csv"),
+                decision_times=val_decision_times,
+                target_times=val_target_times,
+                prev_closes=val_metrics['prev_closes'],
+                pred_closes=val_metrics['predictions'],
+                true_closes=val_metrics['targets'],
+            )
 
     result = {
         'seed': seed,
@@ -741,15 +763,16 @@ def run_experiment(
     # normalized datasets carry the raw split tensor as their target_source.
 
     test_dates = processed['split_info'].get('test_dates')
+    val_dates = processed['split_info'].get('val_dates')
 
     # Raw datasets (for quaternion models with internal RevIN)
     train_dataset_raw = SP500Dataset(train_data, window_size=window_size, target_col=target_col, target_mode=target_mode)
-    val_dataset_raw = SP500Dataset(val_data, window_size=window_size, target_col=target_col, target_mode=target_mode)
+    val_dataset_raw = SP500Dataset(val_data, window_size=window_size, target_col=target_col, target_mode=target_mode, index=val_dates)
     test_dataset_raw = SP500Dataset(test_data, window_size=window_size, target_col=target_col, target_mode=target_mode, index=test_dates)
 
     # Normalized datasets (for real LSTM / naive models)
     train_dataset_norm = SP500Dataset(train_norm, window_size=window_size, target_col=target_col, target_mode=target_mode, raw_data=None if target_mode == "price" else train_data)
-    val_dataset_norm = SP500Dataset(val_norm, window_size=window_size, target_col=target_col, target_mode=target_mode, raw_data=None if target_mode == "price" else val_data)
+    val_dataset_norm = SP500Dataset(val_norm, window_size=window_size, target_col=target_col, target_mode=target_mode, raw_data=None if target_mode == "price" else val_data, index=val_dates)
     test_dataset_norm = SP500Dataset(test_norm, window_size=window_size, target_col=target_col, target_mode=target_mode, raw_data=None if target_mode == "price" else test_data, index=test_dates)
 
     # Create data loaders for both paths
@@ -795,6 +818,9 @@ def run_experiment(
             cur_test_prev_closes = test_dataset_raw.prev_closes
             cur_decision_times = test_dataset_raw.decision_times
             cur_target_times = test_dataset_raw.target_times
+            cur_val_prev_closes = val_dataset_raw.prev_closes
+            cur_val_decision_times = val_dataset_raw.decision_times
+            cur_val_target_times = val_dataset_raw.target_times
         else:
             cur_train_loader = train_loader_norm
             cur_val_loader = val_loader_norm
@@ -802,6 +828,9 @@ def run_experiment(
             cur_test_prev_closes = test_dataset_norm.prev_closes
             cur_decision_times = test_dataset_norm.decision_times
             cur_target_times = test_dataset_norm.target_times
+            cur_val_prev_closes = val_dataset_norm.prev_closes
+            cur_val_decision_times = val_dataset_norm.decision_times
+            cur_val_target_times = val_dataset_norm.target_times
 
         variant_results = []
         fast_mode = config.get('training', {}).get('fast_mode', False)
@@ -829,6 +858,9 @@ def run_experiment(
                 test_decision_times=cur_decision_times,
                 test_target_times=cur_target_times,
                 predictions_dir=output_dir,
+                val_prev_closes=cur_val_prev_closes,
+                val_decision_times=cur_val_decision_times,
+                val_target_times=cur_val_target_times,
             )
             variant_results.append(result)
 
